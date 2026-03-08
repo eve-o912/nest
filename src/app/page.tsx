@@ -1,0 +1,321 @@
+'use client';
+
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  LayoutDashboard,
+  Target,
+  TrendingUp,
+  Lock,
+  Heart,
+  Shield,
+  Flame,
+  Menu,
+  X,
+  Wallet,
+  ChevronRight,
+  Sparkles,
+} from 'lucide-react';
+import { mockPortfolio } from '@/lib/data';
+import { Goal } from '@/lib/types';
+import { Button } from '@/components/ui';
+import { ChatInterface } from '@/components/chat-interface';
+import { GoalsView } from '@/components/goals-view';
+import { YieldDashboard } from '@/components/yield-dashboard';
+import { LockPeriods } from '@/components/lock-periods';
+import { PortfolioHealth } from '@/components/portfolio-health';
+import { RiskEducation } from '@/components/risk-education';
+import { StreaksView } from '@/components/streaks-view';
+import { Onboarding } from '@/components/onboarding';
+import { GoalModal } from '@/components/goal-modal';
+
+const TABS = [
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'goals', label: 'Goals', icon: Target },
+  { id: 'yield', label: 'Yield', icon: TrendingUp },
+  { id: 'locks', label: 'Locks', icon: Lock },
+  { id: 'health', label: 'Health', icon: Heart },
+  { id: 'streaks', label: 'Streaks', icon: Flame },
+  { id: 'risks', label: 'Risks', icon: Shield },
+];
+
+export default function NestApp() {
+  const [activeTab, setActiveTab] = useState('overview');
+  const [isOnboarding, setIsOnboarding] = useState(false);
+  const [portfolio, setPortfolio] = useState(mockPortfolio);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
+  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+
+  const handleAddGoal = () => {
+    setEditingGoal(null);
+    setIsGoalModalOpen(true);
+  };
+
+  const handleEditGoal = (goal: Goal) => {
+    setEditingGoal(goal);
+    setIsGoalModalOpen(true);
+  };
+
+  const handleSaveGoal = (goalData: Partial<Goal>) => {
+    if (editingGoal) {
+      setPortfolio({
+        ...portfolio,
+        goals: portfolio.goals.map((g) =>
+          g.id === editingGoal.id ? { ...g, ...goalData } as Goal : g
+        ),
+      });
+    } else {
+      const newGoal: Goal = {
+        id: `goal_${Date.now()}`,
+        name: goalData.name || 'New Goal',
+        emoji: goalData.emoji || '🎯',
+        targetAmount: goalData.targetAmount || 0,
+        depositedAmount: goalData.depositedAmount || 0,
+        targetDate: goalData.targetDate || '',
+        monthlyPledge: goalData.monthlyPledge || 0,
+        assetType: goalData.assetType || 'USDC',
+        apy: 6.2,
+        createdAt: new Date().toISOString(),
+        ...goalData,
+      } as Goal;
+      
+      setPortfolio({
+        ...portfolio,
+        goals: [...portfolio.goals, newGoal],
+        totalBalance: portfolio.totalBalance + (newGoal.depositedAmount || 0),
+      });
+    }
+  };
+
+  const handleLockGoal = (goalId: string, days: number) => {
+    const lockExpiry = new Date();
+    lockExpiry.setDate(lockExpiry.getDate() + days);
+    
+    setPortfolio({
+      ...portfolio,
+      goals: portfolio.goals.map((g) =>
+        g.id === goalId
+          ? { ...g, lockPeriod: days, lockExpiry: lockExpiry.toISOString() }
+          : g
+      ),
+    });
+  };
+
+  if (isOnboarding) {
+    return <Onboarding onComplete={() => setIsOnboarding(false)} />;
+  }
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'overview':
+        return (
+          <div className="h-full flex flex-col lg:flex-row gap-6">
+            <div className="flex-1 lg:w-2/3">
+              <div className="mb-6">
+                <h1 className="text-2xl font-bold text-neutral-900 dark:text-white mb-2">
+                  Hey, welcome back! 👋
+                </h1>
+                <p className="text-neutral-600 dark:text-neutral-400">
+                  You have {portfolio.goals.length} active goals and ${portfolio.totalBalance.toFixed(2)} earning {portfolio.baseApy}% APY.
+                </p>
+              </div>
+              
+              <div className="grid md:grid-cols-3 gap-4 mb-6">
+                <QuickStat
+                  label="Total Balance"
+                  value={`$${portfolio.totalBalance.toFixed(2)}`}
+                  trend={`+${portfolio.totalEarnedYield.toFixed(2)} earned`}
+                />
+                <QuickStat
+                  label="Current APY"
+                  value={`${portfolio.baseApy}%`}
+                  trend="Variable rate"
+                />
+                <QuickStat
+                  label="Streak"
+                  value={`${portfolio.currentStreak} weeks`}
+                  trend={`Best: ${portfolio.longestStreak}`}
+                />
+              </div>
+
+              <div className="bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-lg">Your Goals</h3>
+                  <Button variant="outline" size="sm" onClick={() => setActiveTab('goals')}>
+                    View All
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </Button>
+                </div>
+                <div className="space-y-3">
+                  {portfolio.goals.slice(0, 3).map((goal) => (
+                    <div
+                      key={goal.id}
+                      className="flex items-center gap-4 p-3 bg-neutral-50 dark:bg-neutral-800 rounded-xl"
+                    >
+                      <span className="text-2xl">{goal.emoji}</span>
+                      <div className="flex-1">
+                        <p className="font-medium text-neutral-900 dark:text-white">{goal.name}</p>
+                        <div className="flex items-center gap-2 text-sm text-neutral-500">
+                          <span>${goal.depositedAmount.toFixed(0)} of ${goal.targetAmount.toFixed(0)}</span>
+                          {goal.lockPeriod && <span className="text-amber-500">🔒 {goal.lockPeriod}d</span>}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-sm font-medium text-neutral-900 dark:text-white">
+                          {((goal.depositedAmount / goal.targetAmount) * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="lg:w-1/3 h-[500px] lg:h-auto">
+              <ChatInterface portfolio={portfolio} />
+            </div>
+          </div>
+        );
+      case 'goals':
+        return (
+          <GoalsView
+            goals={portfolio.goals}
+            onAddGoal={handleAddGoal}
+            onEditGoal={handleEditGoal}
+          />
+        );
+      case 'yield':
+        return <YieldDashboard portfolio={portfolio} />;
+      case 'locks':
+        return (
+          <LockPeriods
+            goals={portfolio.goals}
+            baseApy={portfolio.baseApy}
+            onLockGoal={handleLockGoal}
+          />
+        );
+      case 'health':
+        return <PortfolioHealth portfolio={portfolio} />;
+      case 'streaks':
+        return <StreaksView portfolio={portfolio} />;
+      case 'risks':
+        return <RiskEducation />;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950">
+      <header className="bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                <Wallet className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h1 className="font-bold text-xl text-neutral-900 dark:text-white">Nest</h1>
+                <p className="text-xs text-neutral-500">Goal-based DeFi savings</p>
+              </div>
+            </div>
+
+            <nav className="hidden md:flex items-center gap-1">
+              {TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === tab.id
+                      ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                      : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
+                  }`}
+                >
+                  <tab.icon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="md:hidden w-10 h-10 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center justify-center"
+            >
+              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          </div>
+        </div>
+
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="md:hidden border-t border-neutral-200 dark:border-neutral-800 overflow-hidden"
+            >
+              <div className="px-4 py-2 space-y-1">
+                {TABS.map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => {
+                      setActiveTab(tab.id);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`flex items-center gap-3 w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
+                      activeTab === tab.id
+                        ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                        : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
+                    }`}
+                  >
+                    <tab.icon className="w-4 h-4" />
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.2 }}
+          >
+            {renderContent()}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+
+      <GoalModal
+        isOpen={isGoalModalOpen}
+        onClose={() => setIsGoalModalOpen(false)}
+        onSave={handleSaveGoal}
+        goal={editingGoal}
+      />
+    </div>
+  );
+}
+
+function QuickStat({
+  label,
+  value,
+  trend,
+}: {
+  label: string;
+  value: string;
+  trend: string;
+}) {
+  return (
+    <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-4">
+      <p className="text-sm text-neutral-500 mb-1">{label}</p>
+      <p className="text-xl font-bold text-neutral-900 dark:text-white">{value}</p>
+      <p className="text-xs text-green-600 dark:text-green-400">{trend}</p>
+    </div>
+  );
+}
