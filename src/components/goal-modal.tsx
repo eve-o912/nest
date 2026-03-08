@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useState } from 'react';
@@ -97,7 +98,6 @@ export function GoalModal({ isOpen, onClose, onSave, goal }: GoalModalProps) {
               placeholder="5000"
               value={formData.targetAmount || ''}
               onChange={(e) => setFormData({ ...formData, targetAmount: parseFloat(e.target.value) || 0 })}
-              icon={<DollarSign className="w-4 h-4" />}
               required
             />
             <Input
@@ -106,7 +106,6 @@ export function GoalModal({ isOpen, onClose, onSave, goal }: GoalModalProps) {
               placeholder="0"
               value={formData.depositedAmount || ''}
               onChange={(e) => setFormData({ ...formData, depositedAmount: parseFloat(e.target.value) || 0 })}
-              icon={<Wallet className="w-4 h-4" />}
             />
           </div>
 
@@ -134,7 +133,6 @@ export function GoalModal({ isOpen, onClose, onSave, goal }: GoalModalProps) {
             placeholder="How much can you save per month?"
             value={formData.monthlyPledge || ''}
             onChange={(e) => setFormData({ ...formData, monthlyPledge: parseFloat(e.target.value) || 0 })}
-            icon={<PiggyBank className="w-4 h-4" />}
             required
           />
 
