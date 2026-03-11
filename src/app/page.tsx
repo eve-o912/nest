@@ -28,10 +28,12 @@ import { RiskEducation } from '@/components/risk-education';
 import { StreaksView } from '@/components/streaks-view';
 import { Onboarding } from '@/components/onboarding';
 import { GoalModal } from '@/components/goal-modal';
+import { AgentPanel } from '@/components/AgentPanel';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'goals', label: 'Goals', icon: Target },
+  { id: 'agent', label: 'Agent', icon: Sparkles },
   { id: 'yield', label: 'Yield', icon: TrendingUp },
   { id: 'locks', label: 'Locks', icon: Lock },
   { id: 'health', label: 'Health', icon: Heart },
@@ -184,6 +186,8 @@ export default function NestApp() {
             onEditGoal={handleEditGoal}
           />
         );
+      case 'agent':
+        return <AgentPanel />;
       case 'yield':
         return <YieldDashboard portfolio={portfolio} />;
       case 'locks':

@@ -73,6 +73,41 @@ export async function POST(req: Request) {
   const isCron = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}` 
   const body = await req.json().catch(() => ({}))
 
+  // Handle manual forced actions (e.g., direct deposit from UI)
+  if (body.forceAction && body.userId) {
+    const rows = await sql`SELECT * FROM agent_rules WHERE user_id = ${body.userId}` 
+    if (!rows.length) {
+      return Response.json({ error: 'User not found. Please setup agent rules first.' }, { status: 404 })
+    }
+    const rules = rows[0] as AgentRules
+    const { tool, args } = body.forceAction
+    
+    try {
+      const result = await executeTool(tool, args, rules)
+      
+      await sql`
+        INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
+        VALUES (
+          ${rules.userId}, ${tool},
+          ${JSON.stringify(args)},
+          ${JSON.stringify(result)},
+          ${args.reason ?? ''},
+          ${result.tx_hash ?? null}
+        )
+      `
+      
+      return Response.json({ 
+        ran: 1, 
+        results: [{ userId: rules.userId, actions: [{ tool, args, result }] }]
+      })
+    } catch (err: any) {
+      return Response.json({ 
+        ran: 0, 
+        results: [{ userId: rules.userId, error: err.message }]
+      }, { status: 500 })
+    }
+  }
+
   let users: AgentRules[] = []
   if (isCron) {
     if (new Date().getDate() === 1) {
