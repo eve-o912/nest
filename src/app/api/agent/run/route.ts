@@ -9,11 +9,26 @@ import {
 } from '@/lib/yo-executor'
 import { logger } from '@/lib/retry'
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-})
+// Lazy initialization to prevent crashes on missing env vars
+let genAI: GoogleGenerativeAI | null = null
+let redis: Redis | null = null
+
+function getGenAI() {
+  if (!genAI && process.env.GEMINI_API_KEY) {
+    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+  }
+  return genAI
+}
+
+function getRedis() {
+  if (!redis && process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+    redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    })
+  }
+  return redis
+}
 
 const AGENT_TOOLS = [{
   functionDeclarations: [
@@ -126,7 +141,8 @@ export async function POST(req: Request) {
 
   for (const rules of users) {
     const dedupKey = `agent:${rules.userId}:${new Date().toISOString().split('T')[0]}` 
-    if (isCron && await redis.get(dedupKey)) {
+    const redisInstance = getRedis()
+    if (isCron && redisInstance && await redisInstance.get(dedupKey)) {
       results.push({ userId: rules.userId, skipped: 'already ran today' })
       continue
     }
@@ -193,7 +209,11 @@ HARD RULES:
 Call all applicable tools now.
 `
 
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash', tools: AGENT_TOOLS })
+      const genAIInstance = getGenAI()
+      if (!genAIInstance) {
+        throw new Error('GEMINI_API_KEY not configured')
+      }
+      const model = genAIInstance.getGenerativeModel({ model: 'gemini-2.0-flash', tools: AGENT_TOOLS })
       const chat = model.startChat()
       let response = await chat.sendMessage(agentPrompt)
       const actions = []
@@ -226,7 +246,10 @@ Call all applicable tools now.
         response = await chat.sendMessage(toolResults)
       }
 
-      await redis.set(dedupKey, '1', { ex: 90000 })
+      const redisInstance2 = getRedis()
+      if (redisInstance2) {
+        await redisInstance2.set(dedupKey, '1', { ex: 90000 })
+      }
       results.push({ userId: rules.userId, actions })
 
     } catch (err: any) {
