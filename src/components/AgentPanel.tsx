@@ -17,7 +17,10 @@ import {
   XCircle,
   AlertCircle,
   ExternalLink,
-  Sparkles
+  Sparkles,
+  Info,
+  ArrowRightLeft,
+  Fuel
 } from 'lucide-react';
 import { Button } from '@/components/ui';
 
@@ -35,8 +38,22 @@ interface AgentLog {
     tx_hash?: string;
     basescan_url?: string;
     amount_usdc?: number;
+    slippage_bps?: number;
   };
   executed_at: string;
+}
+
+interface Balances {
+  vault: number;
+  walletUSDC: number;
+  eth: string;
+}
+
+interface Goal {
+  id: string;
+  name: string;
+  deposited_amount: number;
+  target_amount: number;
 }
 
 export function AgentPanel() {
@@ -48,18 +65,23 @@ export function AgentPanel() {
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<AgentLog[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [selectedGoal, setSelectedGoal] = useState('General Savings');
+  const [balances, setBalances] = useState<Balances>({ vault: 0, walletUSDC: 0, eth: '0' });
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'deposit' | 'withdraw' | null>(null);
   
   // Deposit state
   const [depositAmount, setDepositAmount] = useState(10);
   const [depositing, setDepositing] = useState(false);
   const [depositError, setDepositError] = useState<string | null>(null);
-  const [depositSuccess, setDepositSuccess] = useState<{txHash: string; amount: number} | null>(null);
+  const [depositSuccess, setDepositSuccess] = useState<{txHash: string; amount: number; slippage?: number} | null>(null);
   
   // Withdrawal state
   const [withdrawAmount, setWithdrawAmount] = useState(10);
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
-  const [withdrawSuccess, setWithdrawSuccess] = useState<{txHash: string; amount: number} | null>(null);
+  const [withdrawSuccess, setWithdrawSuccess] = useState<{txHash: string; amount: number; slippage?: number} | null>(null);
   const [rules, setRules] = useState({
     autopilot: false,
     scheduledDay: 'Monday',
@@ -71,13 +93,52 @@ export function AgentPanel() {
   });
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !walletAddress) return;
+    
     fetch(`/api/agent/rules?userId=${userId}`)
       .then(r => r.json())
-      .then(data => { if (data) setRules(r => ({ ...r, ...data })); })
+      .then(data => { 
+        if (data) {
+          setRules(r => ({ ...r, ...data }));
+          if (data.selectedGoal) setSelectedGoal(data.selectedGoal);
+        }
+      })
       .catch(console.error);
+    
     fetchLogs();
-  }, [userId]);
+    fetchBalances();
+    fetchGoals();
+    
+    const interval = setInterval(fetchBalances, 30000);
+    return () => clearInterval(interval);
+  }, [userId, walletAddress]);
+
+  async function fetchBalances() {
+    if (!walletAddress) return;
+    try {
+      const res = await fetch(`/api/balances?wallet=${walletAddress}`);
+      const data = await res.json();
+      setBalances(data);
+    } catch (err) {
+      console.error('Failed to fetch balances:', err);
+    }
+  }
+
+  async function fetchGoals() {
+    if (!userId) return;
+    try {
+      const res = await fetch(`/api/goals?userId=${userId}`);
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        setGoals(data);
+      } else {
+        setGoals([{ id: 'default', name: 'General Savings', deposited_amount: 0, target_amount: 1000 }]);
+      }
+    } catch (err) {
+      console.error('Failed to fetch goals:', err);
+      setGoals([{ id: 'default', name: 'General Savings', deposited_amount: 0, target_amount: 1000 }]);
+    }
+  }
 
   async function fetchLogs() {
     if (!userId) return;
@@ -100,7 +161,7 @@ export function AgentPanel() {
       await fetch('/api/agent/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, walletAddress, ...rules }),
+        body: JSON.stringify({ userId, walletAddress, selectedGoal, ...rules }),
       });
     } catch (err) {
       console.error('Failed to save rules:', err);
@@ -124,7 +185,7 @@ export function AgentPanel() {
     setRunning(false);
   }
 
-  async function manualDeposit() {
+  function handleDepositClick() {
     if (!userId || !walletAddress) {
       alert('Please connect your wallet first');
       return;
@@ -133,7 +194,16 @@ export function AgentPanel() {
       setDepositError('Minimum deposit is $0.01');
       return;
     }
+    if (depositAmount > 1000) {
+      setPendingAction('deposit');
+      setShowConfirmModal(true);
+      return;
+    }
+    executeDeposit();
+  }
 
+  async function executeDeposit() {
+    setShowConfirmModal(false);
     setDepositing(true);
     setDepositError(null);
     setDepositSuccess(null);
@@ -147,9 +217,9 @@ export function AgentPanel() {
           forceAction: {
             tool: 'deposit_to_goal',
             args: {
-              goal_name: 'General Savings',
+              goal_name: selectedGoal,
               amount_usdc: depositAmount,
-              reason: `Manual deposit of $${depositAmount}`
+              reason: `Manual deposit of $${depositAmount} to ${selectedGoal}`
             }
           }
         }),
@@ -161,9 +231,11 @@ export function AgentPanel() {
         const result = data.results[0].actions[0].result;
         setDepositSuccess({
           txHash: result.tx_hash!,
-          amount: result.amount_usdc!
+          amount: result.amount_usdc!,
+          slippage: result.slippage_bps
         });
         await fetchLogs();
+        await fetchBalances();
       } else {
         const error = data.results?.[0]?.actions?.[0]?.result?.error 
           || data.results?.[0]?.error 
@@ -177,7 +249,7 @@ export function AgentPanel() {
     setDepositing(false);
   }
 
-  async function manualWithdrawal() {
+  function handleWithdrawClick() {
     if (!userId || !walletAddress) {
       alert('Please connect your wallet first');
       return;
@@ -186,7 +258,16 @@ export function AgentPanel() {
       setWithdrawError('Minimum withdrawal is $0.01');
       return;
     }
+    if (withdrawAmount > 1000) {
+      setPendingAction('withdraw');
+      setShowConfirmModal(true);
+      return;
+    }
+    executeWithdrawal();
+  }
 
+  async function executeWithdrawal() {
+    setShowConfirmModal(false);
     setWithdrawing(true);
     setWithdrawError(null);
     setWithdrawSuccess(null);
@@ -200,9 +281,9 @@ export function AgentPanel() {
           forceAction: {
             tool: 'withdraw_from_goal',
             args: {
-              goal_name: 'General Savings',
+              goal_name: selectedGoal,
               amount_usdc: withdrawAmount,
-              reason: `Manual withdrawal of $${withdrawAmount}`
+              reason: `Manual withdrawal of $${withdrawAmount} from ${selectedGoal}`
             }
           }
         }),
@@ -214,9 +295,11 @@ export function AgentPanel() {
         const result = data.results[0].actions[0].result;
         setWithdrawSuccess({
           txHash: result.tx_hash!,
-          amount: result.amount_usdc!
+          amount: result.amount_usdc!,
+          slippage: result.slippage_bps
         });
         await fetchLogs();
+        await fetchBalances();
       } else {
         const error = data.results?.[0]?.actions?.[0]?.result?.error 
           || data.results?.[0]?.error 
@@ -228,6 +311,14 @@ export function AgentPanel() {
     }
 
     setWithdrawing(false);
+  }
+
+  function setMaxWithdraw() {
+    setWithdrawAmount(Math.floor(balances.vault * 100) / 100);
+  }
+
+  function setMaxDeposit() {
+    setDepositAmount(Math.floor(balances.walletUSDC * 100) / 100);
   }
 
   if (!ready) {
@@ -253,182 +344,294 @@ export function AgentPanel() {
     protect_streak: <Sparkles className="w-5 h-5 text-orange-500" />,
     send_notification: <Bell className="w-5 h-5 text-yellow-500" />,
     notify: <Bell className="w-5 h-5 text-yellow-500" />,
-    withdraw_from_goal: <ExternalLink className="w-5 h-5 text-red-500" />,
+    withdraw_from_goal: <ArrowRightLeft className="w-5 h-5 text-red-500" />,
     error: <AlertCircle className="w-5 h-5 text-red-500" />,
   };
 
+  const hasLowGas = parseFloat(balances.eth) < 0.0001;
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      {/* Manual Deposit Card */}
-      <div className="bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center">
-            <Wallet className="w-5 h-5 text-white" />
+      {/* Balance Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
+          <p className="text-sm text-neutral-500 mb-1">Vault Balance</p>
+          <p className="text-2xl font-bold text-neutral-900 dark:text-white">
+            ${balances.vault.toFixed(2)}
+          </p>
+          <p className="text-xs text-neutral-400">yoUSD on Base</p>
+        </div>
+        <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
+          <p className="text-sm text-neutral-500 mb-1">Wallet USDC</p>
+          <p className="text-2xl font-bold text-neutral-900 dark:text-white">
+            ${balances.walletUSDC.toFixed(2)}
+          </p>
+          <p className="text-xs text-neutral-400">Available to deposit</p>
+        </div>
+        <div className={`rounded-xl border p-4 ${hasLowGas ? 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800' : 'bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800'}`}>
+          <p className="text-sm text-neutral-500 mb-1 flex items-center gap-1">
+            <Fuel className="w-3 h-3" /> ETH Balance
+          </p>
+          <p className={`text-2xl font-bold ${hasLowGas ? 'text-red-600' : 'text-neutral-900 dark:text-white'}`}>
+            {parseFloat(balances.eth).toFixed(4)}
+          </p>
+          {hasLowGas && (
+            <p className="text-xs text-red-600">⚠️ Need ETH for gas fees</p>
+          )}
+        </div>
+      </div>
+
+      {/* Goal Selector */}
+      <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
+        <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+          Selected Goal
+        </label>
+        <select
+          value={selectedGoal}
+          onChange={(e) => setSelectedGoal(e.target.value)}
+          className="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+        >
+          {goals.map(goal => (
+            <option key={goal.id} value={goal.name}>
+              {goal.name} (${goal.deposited_amount.toFixed(2)} / ${goal.target_amount.toFixed(0)})
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Deposit & Withdraw Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Deposit Card */}
+        <div className="bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center">
+              <Wallet className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-lg text-neutral-900 dark:text-white">Deposit</h2>
+              <p className="text-sm text-neutral-500">Add USDC to yoUSD vault</p>
+            </div>
           </div>
-          <div>
-            <h2 className="font-semibold text-lg text-neutral-900 dark:text-white">Make Your First Deposit</h2>
-            <p className="text-sm text-neutral-500">Deposit USDC into the yoUSD vault on Base</p>
-          </div>
+
+          {depositSuccess ? (
+            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-green-600" />
+                <span className="font-medium text-green-800 dark:text-green-400">Deposit successful!</span>
+              </div>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                Deposited ${depositSuccess.amount.toFixed(2)} USDC
+                {depositSuccess.slippage && (
+                  <span className="text-xs text-neutral-400 ml-2">(Slippage: {depositSuccess.slippage / 100}%)</span>
+                )}
+              </p>
+              <a 
+                href={`https://basescan.org/tx/${depositSuccess.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
+              >
+                View on Basescan <ExternalLink className="w-3 h-3" />
+              </a>
+              <div className="pt-2">
+                <Button variant="outline" size="sm" onClick={() => setDepositSuccess(null)}>
+                  Deposit Again
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                  Amount (USDC)
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-neutral-500">$</span>
+                  <input
+                    type="number"
+                    value={depositAmount}
+                    onChange={(e) => setDepositAmount(Number(e.target.value))}
+                    min={0.01}
+                    step={0.01}
+                    className="flex-1 px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                  <button
+                    onClick={setMaxDeposit}
+                    className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    MAX
+                  </button>
+                </div>
+                <p className="text-xs text-neutral-500 mt-1">
+                  Available: ${balances.walletUSDC.toFixed(2)} USDC
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-neutral-500">
+                <Info className="w-3 h-3" />
+                <span>Slippage: 0.5% (50 bps)</span>
+              </div>
+
+              {depositError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded-lg">
+                  <XCircle className="w-4 h-4" />
+                  {depositError}
+                </div>
+              )}
+
+              <Button 
+                onClick={handleDepositClick} 
+                disabled={depositing || balances.walletUSDC < depositAmount}
+                className="w-full"
+              >
+                {depositing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Wallet className="w-4 h-4 mr-2" />
+                    Deposit ${depositAmount.toFixed(2)} USDC
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
         </div>
 
-        {depositSuccess ? (
-          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 text-green-600" />
-              <span className="font-medium text-green-800 dark:text-green-400">Deposit successful!</span>
+        {/* Withdraw Card */}
+        <div className="bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center">
+              <ArrowRightLeft className="w-5 h-5 text-white" />
             </div>
-            <p className="text-sm text-neutral-600 dark:text-neutral-400">
-              Deposited ${depositSuccess.amount.toFixed(2)} USDC
+            <div>
+              <h2 className="font-semibold text-lg text-neutral-900 dark:text-white">Withdraw</h2>
+              <p className="text-sm text-neutral-500">Remove USDC from vault</p>
+            </div>
+          </div>
+
+          {withdrawSuccess ? (
+            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-green-600" />
+                <span className="font-medium text-green-800 dark:text-green-400">Withdrawal successful!</span>
+              </div>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                Withdrew ${withdrawSuccess.amount.toFixed(2)} USDC
+                {withdrawSuccess.slippage && (
+                  <span className="text-xs text-neutral-400 ml-2">(Slippage: {withdrawSuccess.slippage / 100}%)</span>
+                )}
+              </p>
+              <a 
+                href={`https://basescan.org/tx/${withdrawSuccess.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
+              >
+                View on Basescan <ExternalLink className="w-3 h-3" />
+              </a>
+              <div className="pt-2">
+                <Button variant="outline" size="sm" onClick={() => setWithdrawSuccess(null)}>
+                  Withdraw Again
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                  Amount (USDC)
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-neutral-500">$</span>
+                  <input
+                    type="number"
+                    value={withdrawAmount}
+                    onChange={(e) => setWithdrawAmount(Number(e.target.value))}
+                    min={0.01}
+                    step={0.01}
+                    className="flex-1 px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
+                  />
+                  <button
+                    onClick={setMaxWithdraw}
+                    className="text-xs text-red-600 hover:text-red-700 font-medium"
+                  >
+                    MAX
+                  </button>
+                </div>
+                <p className="text-xs text-neutral-500 mt-1">
+                  Available: ${balances.vault.toFixed(2)} USDC
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-neutral-500">
+                <Info className="w-3 h-3" />
+                <span>Slippage: 0.5% (50 bps)</span>
+              </div>
+
+              {withdrawError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded-lg">
+                  <XCircle className="w-4 h-4" />
+                  {withdrawError}
+                </div>
+              )}
+
+              <Button 
+                onClick={handleWithdrawClick} 
+                disabled={withdrawing || balances.vault < withdrawAmount}
+                variant="outline"
+                className="w-full border-red-200 hover:bg-red-50 text-red-600"
+              >
+                {withdrawing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <ArrowRightLeft className="w-4 h-4 mr-2" />
+                    Withdraw ${withdrawAmount.toFixed(2)} USDC
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Confirmation Modal */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-neutral-900 rounded-2xl p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4">Confirm Large Transaction</h3>
+            <p className="text-neutral-600 dark:text-neutral-400 mb-6">
+              You are about to {pendingAction} <strong>${pendingAction === 'deposit' ? depositAmount.toFixed(2) : withdrawAmount.toFixed(2)} USDC</strong>.
+              <br /><br />
+              This is above the $1,000 threshold. Please confirm you want to proceed.
             </p>
-            <a 
-              href={`https://basescan.org/tx/${depositSuccess.txHash}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
-            >
-              View on Basescan <ExternalLink className="w-3 h-3" />
-            </a>
-            <div className="pt-2">
-              <Button variant="outline" size="sm" onClick={() => setDepositSuccess(null)}>
-                Make Another Deposit
+            <div className="flex gap-3">
+              <Button 
+                variant="outline" 
+                className="flex-1"
+                onClick={() => setShowConfirmModal(false)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                className="flex-1"
+                onClick={() => {
+                  if (pendingAction === 'deposit') executeDeposit();
+                  else executeWithdrawal();
+                }}
+              >
+                Confirm
               </Button>
             </div>
           </div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                Amount (USDC)
-              </label>
-              <div className="flex items-center gap-2">
-                <span className="text-neutral-500">$</span>
-                <input
-                  type="number"
-                  value={depositAmount}
-                  onChange={(e) => setDepositAmount(Number(e.target.value))}
-                  min={0.01}
-                  step={0.01}
-                  className="flex-1 px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-              </div>
-              <p className="text-xs text-neutral-500 mt-1">
-                Wallet: {walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'Not connected'}
-              </p>
-            </div>
-
-            {depositError && (
-              <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded-lg">
-                <XCircle className="w-4 h-4" />
-                {depositError}
-              </div>
-            )}
-
-            <Button 
-              onClick={manualDeposit} 
-              disabled={depositing}
-              className="w-full"
-            >
-              {depositing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <Wallet className="w-4 h-4 mr-2" />
-                  Deposit ${depositAmount} USDC
-                </>
-              )}
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {/* Withdrawal Card */}
-      <div className="bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center">
-            <ExternalLink className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h2 className="font-semibold text-lg text-neutral-900 dark:text-white">Withdraw Funds</h2>
-            <p className="text-sm text-neutral-500">Withdraw USDC from the yoUSD vault on Base</p>
-          </div>
         </div>
-
-        {withdrawSuccess ? (
-          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 text-green-600" />
-              <span className="font-medium text-green-800 dark:text-green-400">Withdrawal successful!</span>
-            </div>
-            <p className="text-sm text-neutral-600 dark:text-neutral-400">
-              Withdrew ${withdrawSuccess.amount.toFixed(2)} USDC
-            </p>
-            <a 
-              href={`https://basescan.org/tx/${withdrawSuccess.txHash}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
-            >
-              View on Basescan <ExternalLink className="w-3 h-3" />
-            </a>
-            <div className="pt-2">
-              <Button variant="outline" size="sm" onClick={() => setWithdrawSuccess(null)}>
-                Make Another Withdrawal
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                Amount (USDC)
-              </label>
-              <div className="flex items-center gap-2">
-                <span className="text-neutral-500">$</span>
-                <input
-                  type="number"
-                  value={withdrawAmount}
-                  onChange={(e) => setWithdrawAmount(Number(e.target.value))}
-                  min={0.01}
-                  step={0.01}
-                  className="flex-1 px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
-                />
-              </div>
-              <p className="text-xs text-neutral-500 mt-1">
-                Minimum: $0.01 | Funds go to your connected wallet
-              </p>
-            </div>
-
-            {withdrawError && (
-              <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded-lg">
-                <XCircle className="w-4 h-4" />
-                {withdrawError}
-              </div>
-            )}
-
-            <Button 
-              onClick={manualWithdrawal} 
-              disabled={withdrawing}
-              variant="outline"
-              className="w-full border-red-200 hover:bg-red-50 text-red-600"
-            >
-              {withdrawing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <ExternalLink className="w-4 h-4 mr-2" />
-                  Withdraw ${withdrawAmount} USDC
-                </>
-              )}
-            </Button>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Agent Panel */}
       <div className="bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
@@ -541,7 +744,8 @@ export function AgentPanel() {
                     <input
                       type="number"
                       value={rules.scheduledAmount}
-                      min={1}
+                      min={0.01}
+                      step={0.01}
                       onChange={(e) => setRules(r => ({ ...r, scheduledAmount: Number(e.target.value) }))}
                       className="w-20 bg-transparent outline-none text-neutral-900 dark:text-white"
                     />
@@ -660,13 +864,16 @@ export function AgentPanel() {
                     const result = log.result;
                     const isSuccess = result?.success && !result?.skipped;
                     const isSkipped = result?.skipped;
+                    const isWithdrawal = log.tool_name === 'withdraw_from_goal';
                     
                     return (
                       <div
                         key={log.id}
                         className={`p-4 rounded-xl border ${
                           isSuccess
-                            ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                            ? isWithdrawal 
+                              ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+                              : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
                             : isSkipped
                             ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
                             : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
@@ -681,8 +888,13 @@ export function AgentPanel() {
                               {log.reason || result?.skip_reason || result?.error || log.tool_name}
                             </p>
                             {result?.amount_usdc && (
-                              <p className="text-sm text-green-600 mt-1">
-                                ${result.amount_usdc.toFixed(2)} USDC
+                              <p className={`text-sm mt-1 ${isWithdrawal ? 'text-red-600' : 'text-green-600'}`}>
+                                {isWithdrawal ? '-' : '+'}${result.amount_usdc.toFixed(2)} USDC
+                                {result.slippage_bps && (
+                                  <span className="text-xs text-neutral-400 ml-2">
+                                    (slippage: {result.slippage_bps / 100}%)
+                                  </span>
+                                )}
                               </p>
                             )}
                             {result?.tx_hash && (

@@ -31,6 +31,54 @@ const ERC20_ABI = [
     inputs: [{ name: 'shares', type: 'uint256' }],
     outputs: [{ name: '', type: 'uint256' }],
   },
+  {
+    name: 'convertToShares', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'assets', type: 'uint256' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'previewWithdraw', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'assets', type: 'uint256' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'previewRedeem', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'shares', type: 'uint256' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+] as const
+
+const VAULT_ABI = [
+  {
+    name: 'deposit', type: 'function', stateMutability: 'nonpayable',
+    inputs: [{ name: 'assets', type: 'uint256' }, { name: 'receiver', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'withdraw', type: 'function', stateMutability: 'nonpayable',
+    inputs: [{ name: 'assets', type: 'uint256' }, { name: 'receiver', type: 'address' }, { name: 'owner', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'redeem', type: 'function', stateMutability: 'nonpayable',
+    inputs: [{ name: 'shares', type: 'uint256' }, { name: 'receiver', type: 'address' }, { name: 'owner', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'balanceOf', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'convertToAssets', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'shares', type: 'uint256' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'convertToShares', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'assets', type: 'uint256' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
 ] as const
 
 export const publicClient = createPublicClient({
@@ -214,37 +262,11 @@ export async function hasDepositedThisWeek(userId: string): Promise<boolean> {
   }
 }
 
-// ─── Real deposit via YO API calldata + Privy wallet ─────
-
-async function buildDepositTx(amountRaw: bigint) {
-  return withRetry(
-    async () => {
-      const res = await withTimeout(
-        fetch('https://api.yo.xyz/api/v1/transaction/deposit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chainId: 8453,
-            vault: YOUSD_VAULT,
-            amount: amountRaw.toString(),
-            slippageBps: 50,
-          }),
-        }),
-        15000,
-        'YO API deposit build'
-      )
-      if (!res.ok) throw new Error(`YO API returned ${res.status}`)
-      const data = await res.json()
-      if (!data?.data) throw new Error('Invalid response from YO API')
-      return data.data
-    },
-    { maxAttempts: 3, delayMs: 2000 }
-  )
-}
+// ─── Real deposit via ERC-4626 vault + Privy wallet ─────
 
 function buildApproveTx(amountRaw: bigint) {
   const approveSelector = '0x095ea7b3'
-  const spender = YOGATEWAY.slice(2).padStart(64, '0')
+  const spender = YOUSD_VAULT.slice(2).padStart(64, '0')
   const amount = amountRaw.toString(16).padStart(64, '0')
   return {
     to: USDC_ADDRESS,
@@ -252,15 +274,24 @@ function buildApproveTx(amountRaw: bigint) {
   }
 }
 
+function buildDepositTx(amountRaw: bigint, receiver: string) {
+  const depositSelector = '0x6e553f65'
+  const assets = amountRaw.toString(16).padStart(64, '0')
+  const addr = receiver.slice(2).padStart(64, '0')
+  return {
+    to: YOUSD_VAULT,
+    data: `0x${depositSelector}${assets}${addr}`,
+  }
+}
+
 async function executeRealDeposit(
   userId: string,
   walletAddress: string,
   amountUSDC: number
-): Promise<{ success: boolean; txHash?: string; error?: string }> {
+): Promise<{ success: boolean; txHash?: string; error?: string; slippageBps?: number }> {
   const startTime = Date.now()
   
   try {
-    // Validate inputs
     const validatedWallet = validateWalletAddress(walletAddress)
     const validatedAmount = validateAmount(amountUSDC, 0.01, 100000)
     const validatedUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '')
@@ -273,21 +304,17 @@ async function executeRealDeposit(
     
     const amountRaw = parseUnits(validatedAmount.toFixed(6), USDC_DECIMALS)
 
-    // Build deposit calldata via YO API
-    const depositTx = await buildDepositTx(amountRaw)
-
-    // Check allowance with retry
+    // Check USDC allowance
     const allowance = await withRetry(
       () => publicClient.readContract({
         address: USDC_ADDRESS as `0x${string}`,
         abi: ERC20_ABI,
         functionName: 'allowance',
-        args: [validatedWallet as `0x${string}`, YOGATEWAY as `0x${string}`],
+        args: [validatedWallet as `0x${string}`, YOUSD_VAULT as `0x${string}`],
       }),
       { maxAttempts: 3, delayMs: 1000 }
     )
 
-    // Privy configuration
     const privyBase = `https://auth.privy.io/api/v1/apps/${process.env.PRIVY_APP_ID}`
     const authHeader = `Basic ${Buffer.from(`${process.env.PRIVY_APP_ID}:${process.env.PRIVY_APP_SECRET}`).toString('base64')}`
 
@@ -326,7 +353,6 @@ async function executeRealDeposit(
         throw new Error(`Approve failed: ${err.message || approveRes.statusText}`)
       }
       
-      // Wait for approve to be mined
       const { data: approveData } = await approveRes.json()
       await withTimeout(
         publicClient.waitForTransactionReceipt({
@@ -340,8 +366,10 @@ async function executeRealDeposit(
       logger.info('Approve transaction confirmed', { txHash: approveData.hash })
     }
 
-    // Send deposit
+    // Send deposit to vault
     logger.info('Sending deposit transaction', { wallet: validatedWallet })
+    const depositTx = buildDepositTx(amountRaw, validatedWallet)
+    
     const depositRes = await withTimeout(
       fetch(`${privyBase}/wallets/${validatedWallet}/rpc`, {
         method: 'POST',
@@ -375,7 +403,7 @@ async function executeRealDeposit(
     const { data } = await depositRes.json()
     const txHash = data.hash
 
-    // Wait for on-chain confirmation
+    // Wait for confirmation
     logger.info('Waiting for deposit confirmation', { txHash })
     const receipt = await withTimeout(
       publicClient.waitForTransactionReceipt({
@@ -393,7 +421,7 @@ async function executeRealDeposit(
     const duration = Date.now() - startTime
     logger.info('Deposit completed successfully', { txHash, duration })
 
-    return { success: true, txHash }
+    return { success: true, txHash, slippageBps: 50 }
   } catch (err: any) {
     const duration = Date.now() - startTime
     logger.error('Deposit failed', err, { userId, walletAddress, amountUSDC, duration })
@@ -404,43 +432,40 @@ async function executeRealDeposit(
   }
 }
 
-// ─── Real withdrawal via YO API calldata + Privy wallet ─────
+// ─── Real withdrawal via ERC-4626 vault + Privy wallet ─────
 
-async function buildWithdrawTx(amountRaw: bigint) {
-  return withRetry(
-    async () => {
-      const res = await withTimeout(
-        fetch('https://api.yo.xyz/api/v1/transaction/withdraw', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chainId: 8453,
-            vault: YOUSD_VAULT,
-            amount: amountRaw.toString(),
-            slippageBps: 50,
-          }),
-        }),
-        15000,
-        'YO API withdraw build'
-      )
-      if (!res.ok) throw new Error(`YO API returned ${res.status}`)
-      const data = await res.json()
-      if (!data?.data) throw new Error('Invalid response from YO API')
-      return data.data
-    },
-    { maxAttempts: 3, delayMs: 2000 }
-  )
+function buildWithdrawTx(amountRaw: bigint, receiver: string, owner: string) {
+  const withdrawSelector = '0xb460af94'
+  const assets = amountRaw.toString(16).padStart(64, '0')
+  const recv = receiver.slice(2).padStart(64, '0')
+  const own = owner.slice(2).padStart(64, '0')
+  return {
+    to: YOUSD_VAULT,
+    data: `0x${withdrawSelector}${assets}${recv}${own}`,
+  }
+}
+
+export async function getEthBalance(address: string): Promise<string> {
+  try {
+    const validatedAddress = validateWalletAddress(address)
+    const balance = await publicClient.getBalance({
+      address: validatedAddress as `0x${string}`,
+    })
+    return formatUnits(balance, 18)
+  } catch (err) {
+    logger.error('Failed to get ETH balance', err, { address })
+    return '0'
+  }
 }
 
 async function executeRealWithdrawal(
   userId: string,
   walletAddress: string,
   amountUSDC: number
-): Promise<{ success: boolean; txHash?: string; error?: string }> {
+): Promise<{ success: boolean; txHash?: string; error?: string; slippageBps?: number }> {
   const startTime = Date.now()
   
   try {
-    // Validate inputs
     const validatedWallet = validateWalletAddress(walletAddress)
     const validatedAmount = validateAmount(amountUSDC, 0.01, 100000)
     const validatedUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '')
@@ -453,15 +478,35 @@ async function executeRealWithdrawal(
     
     const amountRaw = parseUnits(validatedAmount.toFixed(6), USDC_DECIMALS)
 
-    // Build withdrawal calldata via YO API
-    const withdrawTx = await buildWithdrawTx(amountRaw)
+    // Check vault balance (shares)
+    const vaultShares = await withRetry(
+      () => publicClient.readContract({
+        address: YOUSD_VAULT as `0x${string}`,
+        abi: VAULT_ABI,
+        functionName: 'balanceOf',
+        args: [validatedWallet as `0x${string}`],
+      }),
+      { maxAttempts: 3, delayMs: 1000 }
+    )
+    
+    const vaultAssets = await publicClient.readContract({
+      address: YOUSD_VAULT as `0x${string}`,
+      abi: VAULT_ABI,
+      functionName: 'convertToAssets',
+      args: [vaultShares],
+    })
+    
+    if (vaultAssets < amountRaw) {
+      throw new Error(`Insufficient vault balance. Have ${formatUnits(vaultAssets, USDC_DECIMALS)} USDC, want ${validatedAmount} USDC`)
+    }
 
-    // Privy configuration
     const privyBase = `https://auth.privy.io/api/v1/apps/${process.env.PRIVY_APP_ID}`
     const authHeader = `Basic ${Buffer.from(`${process.env.PRIVY_APP_ID}:${process.env.PRIVY_APP_SECRET}`).toString('base64')}`
 
     // Send withdrawal
     logger.info('Sending withdrawal transaction', { wallet: validatedWallet })
+    const withdrawTx = buildWithdrawTx(amountRaw, validatedWallet, validatedWallet)
+    
     const withdrawRes = await withTimeout(
       fetch(`${privyBase}/wallets/${validatedWallet}/rpc`, {
         method: 'POST',
@@ -495,7 +540,7 @@ async function executeRealWithdrawal(
     const { data } = await withdrawRes.json()
     const txHash = data.hash
 
-    // Wait for on-chain confirmation
+    // Wait for confirmation
     logger.info('Waiting for withdrawal confirmation', { txHash })
     const receipt = await withTimeout(
       publicClient.waitForTransactionReceipt({
@@ -513,7 +558,7 @@ async function executeRealWithdrawal(
     const duration = Date.now() - startTime
     logger.info('Withdrawal completed successfully', { txHash, duration })
 
-    return { success: true, txHash }
+    return { success: true, txHash, slippageBps: 50 }
   } catch (err: any) {
     const duration = Date.now() - startTime
     logger.error('Withdrawal failed', err, { userId, walletAddress, amountUSDC, duration })
@@ -685,18 +730,14 @@ export async function executeTool(
         const goal_name = args.goal_name || 'General Savings'
         const amount_usdc = validateAmount(args.amount_usdc, 0.01)
         
-        // Check if user has enough deposited
-        const goal = await queryOne<{ id: string; deposited_amount: number }>(
-          `SELECT id, deposited_amount FROM goals WHERE user_id = $1 AND LOWER(name) = LOWER($2)`,
-          [rules.userId, goal_name]
-        )
+        // Check on-chain vault balance
+        const vaultBalance = await getLiveVaultBalance(rules.walletAddress)
         
-        if (!goal) {
-          return { success: false, error: `Goal "${goal_name}" not found` }
-        }
-        
-        if (goal.deposited_amount < amount_usdc) {
-          return { success: false, error: `Insufficient funds. Deposited: $${goal.deposited_amount}, Requested: $${amount_usdc}` }
+        if (vaultBalance < amount_usdc) {
+          return { 
+            success: false, 
+            error: `Insufficient vault balance. Deposited: $${vaultBalance.toFixed(2)}, Requested: $${amount_usdc}` 
+          }
         }
         
         const result = await executeRealWithdrawal(rules.userId, rules.walletAddress, amount_usdc)
@@ -720,6 +761,7 @@ export async function executeTool(
           tx_hash: result.txHash,
           basescan_url: result.txHash ? `https://basescan.org/tx/${result.txHash}` : undefined,
           amount_usdc,
+          slippage_bps: result.slippageBps,
           error: result.error,
         }
       } catch (err: any) {

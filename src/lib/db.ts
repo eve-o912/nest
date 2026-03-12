@@ -49,7 +49,7 @@ export async function checkDatabaseHealth(): Promise<{
 export async function withPool<T>(
   operation: (client: any) => Promise<T>
 ): Promise<T> {
-  const client = await pool.connect();
+  const client = await getPool().connect();
   try {
     return await operation(client);
   } finally {
@@ -61,7 +61,7 @@ export async function withPool<T>(
 export async function withTransaction<T>(
   operation: (trx: any) => Promise<T>
 ): Promise<T> {
-  const client = await pool.connect();
+  const client = await getPool().connect();
   try {
     await client.query('BEGIN');
     const result = await operation(client);
