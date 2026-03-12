@@ -404,6 +404,126 @@ async function executeRealDeposit(
   }
 }
 
+// ─── Real withdrawal via YO API calldata + Privy wallet ─────
+
+async function buildWithdrawTx(amountRaw: bigint) {
+  return withRetry(
+    async () => {
+      const res = await withTimeout(
+        fetch('https://api.yo.xyz/api/v1/transaction/withdraw', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chainId: 8453,
+            vault: YOUSD_VAULT,
+            amount: amountRaw.toString(),
+            slippageBps: 50,
+          }),
+        }),
+        15000,
+        'YO API withdraw build'
+      )
+      if (!res.ok) throw new Error(`YO API returned ${res.status}`)
+      const data = await res.json()
+      if (!data?.data) throw new Error('Invalid response from YO API')
+      return data.data
+    },
+    { maxAttempts: 3, delayMs: 2000 }
+  )
+}
+
+async function executeRealWithdrawal(
+  userId: string,
+  walletAddress: string,
+  amountUSDC: number
+): Promise<{ success: boolean; txHash?: string; error?: string }> {
+  const startTime = Date.now()
+  
+  try {
+    // Validate inputs
+    const validatedWallet = validateWalletAddress(walletAddress)
+    const validatedAmount = validateAmount(amountUSDC, 0.01, 100000)
+    const validatedUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '')
+    
+    logger.info('Starting withdrawal execution', { 
+      userId: validatedUserId, 
+      wallet: validatedWallet, 
+      amount: validatedAmount 
+    })
+    
+    const amountRaw = parseUnits(validatedAmount.toFixed(6), USDC_DECIMALS)
+
+    // Build withdrawal calldata via YO API
+    const withdrawTx = await buildWithdrawTx(amountRaw)
+
+    // Privy configuration
+    const privyBase = `https://auth.privy.io/api/v1/apps/${process.env.PRIVY_APP_ID}`
+    const authHeader = `Basic ${Buffer.from(`${process.env.PRIVY_APP_ID}:${process.env.PRIVY_APP_SECRET}`).toString('base64')}`
+
+    // Send withdrawal
+    logger.info('Sending withdrawal transaction', { wallet: validatedWallet })
+    const withdrawRes = await withTimeout(
+      fetch(`${privyBase}/wallets/${validatedWallet}/rpc`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: authHeader,
+          'privy-app-id': process.env.PRIVY_APP_ID!,
+        },
+        body: JSON.stringify({
+          method: 'eth_sendTransaction',
+          caip2: 'eip155:8453',
+          params: {
+            transaction: {
+              to: withdrawTx.to,
+              data: withdrawTx.data,
+              value: '0x0',
+              chainId: '0x2105',
+            },
+          },
+        }),
+      }),
+      30000,
+      'Privy withdrawal transaction'
+    )
+
+    if (!withdrawRes.ok) {
+      const err = await withdrawRes.json().catch(() => ({ message: 'Unknown error' }))
+      throw new Error(`Withdrawal failed: ${err.message || withdrawRes.statusText}`)
+    }
+
+    const { data } = await withdrawRes.json()
+    const txHash = data.hash
+
+    // Wait for on-chain confirmation
+    logger.info('Waiting for withdrawal confirmation', { txHash })
+    const receipt = await withTimeout(
+      publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: 60_000,
+      }),
+      65000,
+      'Withdrawal confirmation'
+    )
+
+    if (receipt.status !== 'success') {
+      throw new Error(`Transaction reverted: ${txHash}`)
+    }
+
+    const duration = Date.now() - startTime
+    logger.info('Withdrawal completed successfully', { txHash, duration })
+
+    return { success: true, txHash }
+  } catch (err: any) {
+    const duration = Date.now() - startTime
+    logger.error('Withdrawal failed', err, { userId, walletAddress, amountUSDC, duration })
+    return { 
+      success: false, 
+      error: err instanceof ValidationError ? err.message : `Transaction failed: ${err.message}` 
+    }
+  }
+}
+
 // ─── Tool executor ────────────────────────────────────
 
 export async function executeTool(
@@ -557,6 +677,56 @@ export async function executeTool(
         return { success: true, notified: true }
       } catch (err: any) {
         return { success: false, error: `Notification failed: ${err.message}` }
+      }
+    }
+
+    case 'withdraw_from_goal': {
+      try {
+        const goal_name = args.goal_name || 'General Savings'
+        const amount_usdc = validateAmount(args.amount_usdc, 0.01)
+        
+        // Check if user has enough deposited
+        const goal = await queryOne<{ id: string; deposited_amount: number }>(
+          `SELECT id, deposited_amount FROM goals WHERE user_id = $1 AND LOWER(name) = LOWER($2)`,
+          [rules.userId, goal_name]
+        )
+        
+        if (!goal) {
+          return { success: false, error: `Goal "${goal_name}" not found` }
+        }
+        
+        if (goal.deposited_amount < amount_usdc) {
+          return { success: false, error: `Insufficient funds. Deposited: $${goal.deposited_amount}, Requested: $${amount_usdc}` }
+        }
+        
+        const result = await executeRealWithdrawal(rules.userId, rules.walletAddress, amount_usdc)
+        
+        if (result.success) {
+          // Use transaction for database updates
+          await withTransaction(async (trx) => {
+            await trx.query(
+              `UPDATE agent_rules SET spent_this_month = GREATEST(0, spent_this_month - $1), updated_at = now() WHERE user_id = $2`,
+              [amount_usdc, rules.userId]
+            )
+            await trx.query(
+              `UPDATE goals SET deposited_amount = GREATEST(0, deposited_amount - $1) WHERE user_id = $2 AND LOWER(name) = LOWER($3)`,
+              [amount_usdc, rules.userId, goal_name]
+            )
+          })
+        }
+        
+        return {
+          success: result.success,
+          tx_hash: result.txHash,
+          basescan_url: result.txHash ? `https://basescan.org/tx/${result.txHash}` : undefined,
+          amount_usdc,
+          error: result.error,
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          error: err instanceof ValidationError ? err.message : `Withdrawal failed: ${err.message}`,
+        }
       }
     }
 

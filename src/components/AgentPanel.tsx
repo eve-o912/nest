@@ -48,10 +48,18 @@ export function AgentPanel() {
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<AgentLog[]>([]);
+  
+  // Deposit state
   const [depositAmount, setDepositAmount] = useState(10);
   const [depositing, setDepositing] = useState(false);
   const [depositError, setDepositError] = useState<string | null>(null);
   const [depositSuccess, setDepositSuccess] = useState<{txHash: string; amount: number} | null>(null);
+  
+  // Withdrawal state
+  const [withdrawAmount, setWithdrawAmount] = useState(10);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [withdrawSuccess, setWithdrawSuccess] = useState<{txHash: string; amount: number} | null>(null);
   const [rules, setRules] = useState({
     autopilot: false,
     scheduledDay: 'Monday',
@@ -121,8 +129,8 @@ export function AgentPanel() {
       alert('Please connect your wallet first');
       return;
     }
-    if (depositAmount < 1) {
-      setDepositError('Minimum deposit is $1');
+    if (depositAmount < 0.01) {
+      setDepositError('Minimum deposit is $0.01');
       return;
     }
 
@@ -169,6 +177,59 @@ export function AgentPanel() {
     setDepositing(false);
   }
 
+  async function manualWithdrawal() {
+    if (!userId || !walletAddress) {
+      alert('Please connect your wallet first');
+      return;
+    }
+    if (withdrawAmount < 0.01) {
+      setWithdrawError('Minimum withdrawal is $0.01');
+      return;
+    }
+
+    setWithdrawing(true);
+    setWithdrawError(null);
+    setWithdrawSuccess(null);
+
+    try {
+      const res = await fetch('/api/agent/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          userId,
+          forceAction: {
+            tool: 'withdraw_from_goal',
+            args: {
+              goal_name: 'General Savings',
+              amount_usdc: withdrawAmount,
+              reason: `Manual withdrawal of $${withdrawAmount}`
+            }
+          }
+        }),
+      });
+
+      const data = await res.json();
+      
+      if (data.results?.[0]?.actions?.[0]?.result?.success) {
+        const result = data.results[0].actions[0].result;
+        setWithdrawSuccess({
+          txHash: result.tx_hash!,
+          amount: result.amount_usdc!
+        });
+        await fetchLogs();
+      } else {
+        const error = data.results?.[0]?.actions?.[0]?.result?.error 
+          || data.results?.[0]?.error 
+          || 'Withdrawal failed';
+        setWithdrawError(error);
+      }
+    } catch (err: any) {
+      setWithdrawError(err.message || 'Withdrawal failed');
+    }
+
+    setWithdrawing(false);
+  }
+
   if (!ready) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -192,6 +253,7 @@ export function AgentPanel() {
     protect_streak: <Sparkles className="w-5 h-5 text-orange-500" />,
     send_notification: <Bell className="w-5 h-5 text-yellow-500" />,
     notify: <Bell className="w-5 h-5 text-yellow-500" />,
+    withdraw_from_goal: <ExternalLink className="w-5 h-5 text-red-500" />,
     error: <AlertCircle className="w-5 h-5 text-red-500" />,
   };
 
@@ -244,8 +306,8 @@ export function AgentPanel() {
                   type="number"
                   value={depositAmount}
                   onChange={(e) => setDepositAmount(Number(e.target.value))}
-                  min={1}
-                  step={1}
+                  min={0.01}
+                  step={0.01}
                   className="flex-1 px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
@@ -275,6 +337,92 @@ export function AgentPanel() {
                 <>
                   <Wallet className="w-4 h-4 mr-2" />
                   Deposit ${depositAmount} USDC
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Withdrawal Card */}
+      <div className="bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center">
+            <ExternalLink className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-lg text-neutral-900 dark:text-white">Withdraw Funds</h2>
+            <p className="text-sm text-neutral-500">Withdraw USDC from the yoUSD vault on Base</p>
+          </div>
+        </div>
+
+        {withdrawSuccess ? (
+          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-green-600" />
+              <span className="font-medium text-green-800 dark:text-green-400">Withdrawal successful!</span>
+            </div>
+            <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              Withdrew ${withdrawSuccess.amount.toFixed(2)} USDC
+            </p>
+            <a 
+              href={`https://basescan.org/tx/${withdrawSuccess.txHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
+            >
+              View on Basescan <ExternalLink className="w-3 h-3" />
+            </a>
+            <div className="pt-2">
+              <Button variant="outline" size="sm" onClick={() => setWithdrawSuccess(null)}>
+                Make Another Withdrawal
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                Amount (USDC)
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-neutral-500">$</span>
+                <input
+                  type="number"
+                  value={withdrawAmount}
+                  onChange={(e) => setWithdrawAmount(Number(e.target.value))}
+                  min={0.01}
+                  step={0.01}
+                  className="flex-1 px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
+                />
+              </div>
+              <p className="text-xs text-neutral-500 mt-1">
+                Minimum: $0.01 | Funds go to your connected wallet
+              </p>
+            </div>
+
+            {withdrawError && (
+              <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded-lg">
+                <XCircle className="w-4 h-4" />
+                {withdrawError}
+              </div>
+            )}
+
+            <Button 
+              onClick={manualWithdrawal} 
+              disabled={withdrawing}
+              variant="outline"
+              className="w-full border-red-200 hover:bg-red-50 text-red-600"
+            >
+              {withdrawing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Withdraw ${withdrawAmount} USDC
                 </>
               )}
             </Button>
