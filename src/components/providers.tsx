@@ -9,7 +9,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       config={{
         appearance: {
           theme: 'light',
-          accentColor: '#676FFF',
+          accentColor: '#C8D946',
           logo: '/nest-logo.png',
         },
         embeddedWallets: {
