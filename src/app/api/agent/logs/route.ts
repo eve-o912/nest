@@ -1,15 +1,31 @@
-import { neon } from '@neondatabase/serverless'
-const sql = neon(process.env.DATABASE_URL!)
+import { query } from '@/lib/db'
+import { validateUserId, withSecurity } from '@/lib/validation'
+import { logger } from '@/lib/retry'
 
-export async function GET(req: Request) {
+export const GET = withSecurity(async (req: Request) => {
   const { searchParams } = new URL(req.url)
-  const userId = searchParams.get('userId')
-  if (!userId) return Response.json({ error: 'userId required' }, { status: 400 })
-  const logs = await sql`
-    SELECT * FROM agent_logs
-    WHERE user_id = ${userId}
-    ORDER BY executed_at DESC
-    LIMIT 30
-  `
-  return Response.json(logs)
-}
+  const userIdParam = searchParams.get('userId')
+  
+  if (!userIdParam) {
+    return Response.json({ error: 'userId required' }, { status: 400 })
+  }
+  
+  try {
+    const userId = validateUserId(userIdParam)
+    const logs = await query(
+      `SELECT * FROM agent_logs
+       WHERE user_id = $1
+       ORDER BY executed_at DESC
+       LIMIT 30`,
+      [userId]
+    )
+    
+    logger.info('Fetched agent logs', { userId, count: logs.length })
+    return Response.json(logs)
+  } catch (err: any) {
+    logger.error('Failed to fetch logs', err, { userId: userIdParam })
+    return Response.json({ 
+      error: err.message || 'Failed to fetch logs' 
+    }, { status: 500 })
+  }
+})

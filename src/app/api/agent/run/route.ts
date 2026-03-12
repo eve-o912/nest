@@ -1,15 +1,15 @@
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai'
-import { neon } from '@neondatabase/serverless'
 import { Redis } from '@upstash/redis'
+import { query } from '@/lib/db'
 import {
   getLiveUSDCBalance, getLiveVaultBalance, getLiveAPY,
   getUserYieldEarned, getUserDepositHistory,
   getDaysSinceLastDeposit, hasDepositedThisWeek,
   executeTool, type AgentRules,
 } from '@/lib/yo-executor'
+import { logger } from '@/lib/retry'
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-const sql = neon(process.env.DATABASE_URL!)
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
 
   // Handle manual forced actions (e.g., direct deposit from UI)
   if (body.forceAction && body.userId) {
-    const rows = await sql`SELECT * FROM agent_rules WHERE user_id = ${body.userId}` 
+    const rows = await query('SELECT * FROM agent_rules WHERE user_id = $1', [body.userId])
     if (!rows.length) {
       return Response.json({ error: 'User not found. Please setup agent rules first.' }, { status: 404 })
     }
@@ -85,22 +85,25 @@ export async function POST(req: Request) {
     try {
       const result = await executeTool(tool, args, rules)
       
-      await sql`
-        INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
-        VALUES (
-          ${rules.userId}, ${tool},
-          ${JSON.stringify(args)},
-          ${JSON.stringify(result)},
-          ${args.reason ?? ''},
-          ${result.tx_hash ?? null}
-        )
-      `
+      await query(
+        `INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          rules.userId,
+          tool,
+          JSON.stringify(args),
+          JSON.stringify(result),
+          args.reason ?? '',
+          result.tx_hash ?? null
+        ]
+      )
       
       return Response.json({ 
         ran: 1, 
         results: [{ userId: rules.userId, actions: [{ tool, args, result }] }]
       })
     } catch (err: any) {
+      logger.error('Manual action failed', err, { userId: body.userId, tool: body.forceAction?.tool })
       return Response.json({ 
         ran: 0, 
         results: [{ userId: rules.userId, error: err.message }]
@@ -111,11 +114,11 @@ export async function POST(req: Request) {
   let users: AgentRules[] = []
   if (isCron) {
     if (new Date().getDate() === 1) {
-      await sql`UPDATE agent_rules SET spent_this_month = 0` 
+      await query('UPDATE agent_rules SET spent_this_month = 0')
     }
-    users = await sql`SELECT * FROM agent_rules WHERE enabled = true` as AgentRules[]
+    users = await query('SELECT * FROM agent_rules WHERE enabled = true') as AgentRules[]
   } else if (body.userId) {
-    const rows = await sql`SELECT * FROM agent_rules WHERE user_id = ${body.userId} AND enabled = true` 
+    const rows = await query('SELECT * FROM agent_rules WHERE user_id = $1 AND enabled = true', [body.userId])
     users = rows as AgentRules[]
   }
 
@@ -138,7 +141,7 @@ export async function POST(req: Request) {
           getUserDepositHistory(rules.walletAddress),
           getDaysSinceLastDeposit(rules.userId),
           hasDepositedThisWeek(rules.userId),
-          sql`SELECT * FROM goals WHERE user_id = ${rules.userId} ORDER BY priority ASC`,
+          query('SELECT * FROM goals WHERE user_id = $1 ORDER BY priority ASC', [rules.userId]),
         ])
 
       const today = new Date()
@@ -205,16 +208,18 @@ Call all applicable tools now.
           const { name, args } = part.functionCall
           const result = await executeTool(name, args, rules)
 
-          await sql`
-            INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
-            VALUES (
-              ${rules.userId}, ${name},
-              ${JSON.stringify(args)},
-              ${JSON.stringify(result)},
-              ${args.reason ?? ''},
-              ${result.tx_hash ?? null}
-            )
-          `
+          await query(
+            `INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              rules.userId,
+              name,
+              JSON.stringify(args),
+              JSON.stringify(result),
+              args.reason ?? '',
+              result.tx_hash ?? null
+            ]
+          )
           actions.push({ tool: name, args, result })
           toolResults.push({ functionResponse: { name, response: result } })
         }
@@ -225,10 +230,12 @@ Call all applicable tools now.
       results.push({ userId: rules.userId, actions })
 
     } catch (err: any) {
-      await sql`
-        INSERT INTO agent_logs (user_id, tool_name, input, result, reason)
-        VALUES (${rules.userId}, 'error', '{}', ${JSON.stringify({ error: err.message })}, 'Agent crashed')
-      `
+      logger.error('Agent execution failed', err, { userId: rules.userId })
+      await query(
+        `INSERT INTO agent_logs (user_id, tool_name, input, result, reason)
+         VALUES ($1, 'error', '{}', $2, 'Agent crashed')`,
+        [rules.userId, JSON.stringify({ error: err.message })]
+      )
       results.push({ userId: rules.userId, error: err.message })
     }
   }

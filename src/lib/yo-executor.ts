@@ -6,7 +6,9 @@ import {
 } from 'viem'
 import { base } from 'viem/chains'
 import { PrivyClient } from '@privy-io/server-auth'
-import { neon } from '@neondatabase/serverless'
+import { withRetry, withCircuitBreaker, withTimeout, logger, RetryableError } from './retry'
+import { withTransaction, query, queryOne, closePool } from './db'
+import { validateWalletAddress, validateAmount, ValidationError } from './validation'
 
 const YOUSD_VAULT  = '0x0000000f926268be77AB7E1d17e4e4c7d4b28a65'
 const YOGATEWAY    = '0xF1EeE0957267b1A474323Ff9CfF7719E964969FA'
@@ -41,7 +43,6 @@ const privy = new PrivyClient(
   process.env.PRIVY_APP_SECRET!
 )
 
-const sql = neon(process.env.DATABASE_URL!)
 
 export interface AgentRules {
   userId: string
@@ -70,102 +71,178 @@ export interface ToolResult {
 // ─── Live blockchain reads ─────────────────────────────
 
 export async function getLiveUSDCBalance(address: string): Promise<number> {
-  const raw = await publicClient.readContract({
-    address: USDC_ADDRESS as `0x${string}`,
-    abi: ERC20_ABI,
-    functionName: 'balanceOf',
-    args: [address as `0x${string}`],
-  })
-  return Number(formatUnits(raw, USDC_DECIMALS))
+  try {
+    const validatedAddress = validateWalletAddress(address)
+    const raw = await withRetry(
+      () => publicClient.readContract({
+        address: USDC_ADDRESS as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [validatedAddress as `0x${string}`],
+      }),
+      { maxAttempts: 3, delayMs: 1000 }
+    )
+    return Number(formatUnits(raw, USDC_DECIMALS))
+  } catch (err) {
+    logger.error('Failed to get USDC balance', err, { address })
+    throw new RetryableError('Failed to read USDC balance')
+  }
 }
 
 export async function getLiveVaultBalance(address: string): Promise<number> {
-  const sharesRaw = await publicClient.readContract({
-    address: YOUSD_VAULT as `0x${string}`,
-    abi: ERC20_ABI,
-    functionName: 'balanceOf',
-    args: [address as `0x${string}`],
-  })
-  const assetsRaw = await publicClient.readContract({
-    address: YOUSD_VAULT as `0x${string}`,
-    abi: ERC20_ABI,
-    functionName: 'convertToAssets',
-    args: [sharesRaw],
-  })
-  return Number(formatUnits(assetsRaw, USDC_DECIMALS))
+  try {
+    const validatedAddress = validateWalletAddress(address)
+    const [sharesRaw, assetsRaw] = await withRetry(
+      async () => {
+        const shares = await publicClient.readContract({
+          address: YOUSD_VAULT as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: 'balanceOf',
+          args: [validatedAddress as `0x${string}`],
+        })
+        const assets = await publicClient.readContract({
+          address: YOUSD_VAULT as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: 'convertToAssets',
+          args: [shares],
+        })
+        return [shares, assets]
+      },
+      { maxAttempts: 3, delayMs: 1000 }
+    )
+    return Number(formatUnits(assetsRaw, USDC_DECIMALS))
+  } catch (err) {
+    logger.error('Failed to get vault balance', err, { address })
+    throw new RetryableError('Failed to read vault balance')
+  }
 }
 
 // ─── YO API Reads (no key needed) ──────────────────────
 
 export async function getUserYieldEarned(walletAddress: string): Promise<number> {
-  const res = await fetch(
-    `https://api.yo.xyz/api/v1/performance/user/base/${YOUSD_VAULT}/${walletAddress}` 
+  return withCircuitBreaker(
+    'yo-api-yield',
+    async () => {
+      const validatedAddress = validateWalletAddress(walletAddress)
+      const res = await withTimeout(
+        fetch(`https://api.yo.xyz/api/v1/performance/user/base/${YOUSD_VAULT}/${validatedAddress}`),
+        10000,
+        'YO API yield fetch'
+      )
+      if (!res.ok) throw new Error(`YO API returned ${res.status}`)
+      const data = await res.json()
+      return Number(data?.data?.yieldEarned?.formatted ?? 0)
+    },
+    { failureThreshold: 5, resetTimeoutMs: 60000 }
   )
-  const data = await res.json()
-  return Number(data?.data?.yieldEarned?.formatted ?? 0)
 }
 
 export async function getUserDepositHistory(walletAddress: string) {
-  const res = await fetch(
-    `https://api.yo.xyz/api/v1/history/user/base/${YOUSD_VAULT}/${walletAddress}?limit=10` 
+  return withCircuitBreaker(
+    'yo-api-history',
+    async () => {
+      const validatedAddress = validateWalletAddress(walletAddress)
+      const res = await withTimeout(
+        fetch(`https://api.yo.xyz/api/v1/history/user/base/${YOUSD_VAULT}/${validatedAddress}?limit=10`),
+        10000,
+        'YO API history fetch'
+      )
+      if (!res.ok) throw new Error(`YO API returned ${res.status}`)
+      const data = await res.json()
+      return data?.data ?? []
+    },
+    { failureThreshold: 5, resetTimeoutMs: 60000 }
   )
-  const data = await res.json()
-  return data?.data ?? []
 }
 
 export async function getLiveAPY(): Promise<number> {
-  const res = await fetch(`https://api.yo.xyz/api/v1/vault/base/${YOUSD_VAULT}/snapshot`)
-  const data = await res.json()
-  return Number(data?.data?.apy?.current ?? 0)
+  return withCircuitBreaker(
+    'yo-api-apy',
+    async () => {
+      const res = await withTimeout(
+        fetch(`https://api.yo.xyz/api/v1/vault/base/${YOUSD_VAULT}/snapshot`),
+        10000,
+        'YO API APY fetch'
+      )
+      if (!res.ok) throw new Error(`YO API returned ${res.status}`)
+      const data = await res.json()
+      return Number(data?.data?.apy?.current ?? 0)
+    },
+    { failureThreshold: 5, resetTimeoutMs: 60000 }
+  )
 }
 
 export async function getDaysSinceLastDeposit(userId: string): Promise<number> {
-  const rows = await sql`
-    SELECT executed_at FROM agent_logs
-    WHERE user_id = ${userId}
-    AND tool_name IN ('deposit_to_goal','sweep_idle_usdc','protect_streak')
-    AND (result->>'success')::boolean = true
-    ORDER BY executed_at DESC LIMIT 1
-  `
-  if (rows.length === 0) return 999
-  return Math.floor((Date.now() - new Date(rows[0].executed_at).getTime()) / 86400000)
+  try {
+    const validatedId = userId.replace(/[^a-zA-Z0-9_-]/g, '')
+    const row = await queryOne<{ executed_at: string }>(
+      `SELECT executed_at FROM agent_logs
+       WHERE user_id = $1
+       AND tool_name IN ('deposit_to_goal','sweep_idle_usdc','protect_streak')
+       AND (result->>'success')::boolean = true
+       ORDER BY executed_at DESC LIMIT 1`,
+      [validatedId]
+    )
+    if (!row) return 999
+    return Math.floor((Date.now() - new Date(row.executed_at).getTime()) / 86400000)
+  } catch (err) {
+    logger.error('Failed to get days since last deposit', err, { userId })
+    return 999
+  }
 }
 
 export async function hasDepositedThisWeek(userId: string): Promise<boolean> {
-  const monday = new Date()
-  monday.setDate(monday.getDate() - monday.getDay() + 1)
-  monday.setHours(0, 0, 0, 0)
-  const rows = await sql`
-    SELECT id FROM agent_logs
-    WHERE user_id = ${userId}
-    AND tool_name IN ('deposit_to_goal','sweep_idle_usdc','protect_streak')
-    AND (result->>'success')::boolean = true
-    AND executed_at >= ${monday.toISOString()}
-    LIMIT 1
-  `
-  return rows.length > 0
+  try {
+    const validatedId = userId.replace(/[^a-zA-Z0-9_-]/g, '')
+    const monday = new Date()
+    monday.setDate(monday.getDate() - monday.getDay() + 1)
+    monday.setHours(0, 0, 0, 0)
+    
+    const row = await queryOne<{ id: string }>(
+      `SELECT id FROM agent_logs
+       WHERE user_id = $1
+       AND tool_name IN ('deposit_to_goal','sweep_idle_usdc','protect_streak')
+       AND (result->>'success')::boolean = true
+       AND executed_at >= $2
+       LIMIT 1`,
+      [validatedId, monday.toISOString()]
+    )
+    return !!row
+  } catch (err) {
+    logger.error('Failed to check weekly deposit', err, { userId })
+    return false
+  }
 }
 
 // ─── Real deposit via YO API calldata + Privy wallet ─────
 
 async function buildDepositTx(amountRaw: bigint) {
-  // Call YO API to build deposit calldata
-  const res = await fetch('https://api.yo.xyz/api/v1/transaction/deposit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chainId: 8453,
-      vault: YOUSD_VAULT,
-      amount: amountRaw.toString(),
-      slippageBps: 50,
-    }),
-  })
-  const data = await res.json()
-  return data?.data
+  return withRetry(
+    async () => {
+      const res = await withTimeout(
+        fetch('https://api.yo.xyz/api/v1/transaction/deposit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chainId: 8453,
+            vault: YOUSD_VAULT,
+            amount: amountRaw.toString(),
+            slippageBps: 50,
+          }),
+        }),
+        15000,
+        'YO API deposit build'
+      )
+      if (!res.ok) throw new Error(`YO API returned ${res.status}`)
+      const data = await res.json()
+      if (!data?.data) throw new Error('Invalid response from YO API')
+      return data.data
+    },
+    { maxAttempts: 3, delayMs: 2000 }
+  )
 }
 
-async function buildApproveTx(amountRaw: bigint) {
-  // Standard ERC20 approve calldata
+function buildApproveTx(amountRaw: bigint) {
   const approveSelector = '0x095ea7b3'
   const spender = YOGATEWAY.slice(2).padStart(64, '0')
   const amount = amountRaw.toString(16).padStart(64, '0')
@@ -180,29 +257,93 @@ async function executeRealDeposit(
   walletAddress: string,
   amountUSDC: number
 ): Promise<{ success: boolean; txHash?: string; error?: string }> {
+  const startTime = Date.now()
+  
   try {
-    const amountRaw = parseUnits(amountUSDC.toFixed(6), USDC_DECIMALS)
+    // Validate inputs
+    const validatedWallet = validateWalletAddress(walletAddress)
+    const validatedAmount = validateAmount(amountUSDC, 0.01, 100000)
+    const validatedUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '')
+    
+    logger.info('Starting deposit execution', { 
+      userId: validatedUserId, 
+      wallet: validatedWallet, 
+      amount: validatedAmount 
+    })
+    
+    const amountRaw = parseUnits(validatedAmount.toFixed(6), USDC_DECIMALS)
 
     // Build deposit calldata via YO API
     const depositTx = await buildDepositTx(amountRaw)
-    if (!depositTx) throw new Error('Failed to build deposit tx')
 
-    // Check allowance — approve if needed
-    const allowance = await publicClient.readContract({
-      address: USDC_ADDRESS as `0x${string}`,
-      abi: ERC20_ABI,
-      functionName: 'allowance',
-      args: [walletAddress as `0x${string}`, YOGATEWAY as `0x${string}`],
-    })
+    // Check allowance with retry
+    const allowance = await withRetry(
+      () => publicClient.readContract({
+        address: USDC_ADDRESS as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: 'allowance',
+        args: [validatedWallet as `0x${string}`, YOGATEWAY as `0x${string}`],
+      }),
+      { maxAttempts: 3, delayMs: 1000 }
+    )
 
-    // Sign + send via Privy server wallet
-    const privyBase = `https://auth.privy.io/api/v1/apps/${process.env.PRIVY_APP_ID}` 
-    const authHeader = `Basic ${Buffer.from(`${process.env.PRIVY_APP_ID}:${process.env.PRIVY_APP_SECRET}`).toString('base64')}` 
+    // Privy configuration
+    const privyBase = `https://auth.privy.io/api/v1/apps/${process.env.PRIVY_APP_ID}`
+    const authHeader = `Basic ${Buffer.from(`${process.env.PRIVY_APP_ID}:${process.env.PRIVY_APP_SECRET}`).toString('base64')}`
 
-    // Approve if needed
+    // Send approve if needed
     if (allowance < amountRaw) {
-      const approveTx = await buildApproveTx(amountRaw)
-      await fetch(`${privyBase}/wallets/${walletAddress}/rpc`, {
+      logger.info('Sending approve transaction', { wallet: validatedWallet })
+      const approveTx = buildApproveTx(amountRaw)
+      
+      const approveRes = await withTimeout(
+        fetch(`${privyBase}/wallets/${validatedWallet}/rpc`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: authHeader,
+            'privy-app-id': process.env.PRIVY_APP_ID!,
+          },
+          body: JSON.stringify({
+            method: 'eth_sendTransaction',
+            caip2: 'eip155:8453',
+            params: {
+              transaction: {
+                to: approveTx.to,
+                data: approveTx.data,
+                value: '0x0',
+                chainId: '0x2105',
+              },
+            },
+          }),
+        }),
+        30000,
+        'Privy approve transaction'
+      )
+
+      if (!approveRes.ok) {
+        const err = await approveRes.json().catch(() => ({ message: 'Unknown error' }))
+        throw new Error(`Approve failed: ${err.message || approveRes.statusText}`)
+      }
+      
+      // Wait for approve to be mined
+      const { data: approveData } = await approveRes.json()
+      await withTimeout(
+        publicClient.waitForTransactionReceipt({
+          hash: approveData.hash,
+          timeout: 60_000,
+        }),
+        65000,
+        'Approve confirmation'
+      )
+      
+      logger.info('Approve transaction confirmed', { txHash: approveData.hash })
+    }
+
+    // Send deposit
+    logger.info('Sending deposit transaction', { wallet: validatedWallet })
+    const depositRes = await withTimeout(
+      fetch(`${privyBase}/wallets/${validatedWallet}/rpc`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -214,57 +355,52 @@ async function executeRealDeposit(
           caip2: 'eip155:8453',
           params: {
             transaction: {
-              to: approveTx.to,
-              data: approveTx.data,
+              to: depositTx.to,
+              data: depositTx.data,
               value: '0x0',
               chainId: '0x2105',
             },
           },
         }),
-      })
-    }
-
-    // Send deposit
-    const depositRes = await fetch(`${privyBase}/wallets/${walletAddress}/rpc`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: authHeader,
-        'privy-app-id': process.env.PRIVY_APP_ID!,
-      },
-      body: JSON.stringify({
-        method: 'eth_sendTransaction',
-        caip2: 'eip155:8453',
-        params: {
-          transaction: {
-            to: depositTx.to,
-            data: depositTx.data,
-            value: '0x0',
-            chainId: '0x2105',
-          },
-        },
       }),
-    })
+      30000,
+      'Privy deposit transaction'
+    )
 
     if (!depositRes.ok) {
-      const err = await depositRes.json()
-      throw new Error(err.message || 'Privy RPC failed')
+      const err = await depositRes.json().catch(() => ({ message: 'Unknown error' }))
+      throw new Error(`Deposit failed: ${err.message || depositRes.statusText}`)
     }
 
     const { data } = await depositRes.json()
     const txHash = data.hash
 
     // Wait for on-chain confirmation
-    const receipt = await publicClient.waitForTransactionReceipt({
-      hash: txHash,
-      timeout: 60_000,
-    })
+    logger.info('Waiting for deposit confirmation', { txHash })
+    const receipt = await withTimeout(
+      publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: 60_000,
+      }),
+      65000,
+      'Deposit confirmation'
+    )
 
-    if (receipt.status !== 'success') throw new Error('Transaction reverted')
+    if (receipt.status !== 'success') {
+      throw new Error(`Transaction reverted: ${txHash}`)
+    }
+
+    const duration = Date.now() - startTime
+    logger.info('Deposit completed successfully', { txHash, duration })
 
     return { success: true, txHash }
   } catch (err: any) {
-    return { success: false, error: err.message }
+    const duration = Date.now() - startTime
+    logger.error('Deposit failed', err, { userId, walletAddress, amountUSDC, duration })
+    return { 
+      success: false, 
+      error: err instanceof ValidationError ? err.message : `Transaction failed: ${err.message}` 
+    }
   }
 }
 
@@ -294,64 +430,144 @@ export async function executeTool(
 
   switch (toolName) {
     case 'deposit_to_goal': {
-      const { goal_name, amount_usdc } = args
-      const result = await executeRealDeposit(rules.userId, rules.walletAddress, amount_usdc)
-      if (result.success) {
-        await sql`UPDATE agent_rules SET spent_this_month = spent_this_month + ${amount_usdc}, updated_at = now() WHERE user_id = ${rules.userId}` 
-        await sql`UPDATE goals SET deposited_amount = deposited_amount + ${amount_usdc} WHERE user_id = ${rules.userId} AND LOWER(name) = LOWER(${goal_name})` 
-      }
-      return {
-        success: result.success,
-        tx_hash: result.txHash,
-        basescan_url: result.txHash ? `https://basescan.org/tx/${result.txHash}` : undefined,
-        amount_usdc,
-        error: result.error,
+      try {
+        const goal_name = args.goal_name || 'General Savings'
+        const amount_usdc = validateAmount(args.amount_usdc, 0.01)
+        
+        const result = await executeRealDeposit(rules.userId, rules.walletAddress, amount_usdc)
+        
+        if (result.success) {
+          // Use transaction for database updates
+          await withTransaction(async (trx) => {
+            await trx.query(
+              `UPDATE agent_rules SET spent_this_month = spent_this_month + $1, updated_at = now() WHERE user_id = $2`,
+              [amount_usdc, rules.userId]
+            )
+            await trx.query(
+              `UPDATE goals SET deposited_amount = deposited_amount + $1 WHERE user_id = $2 AND LOWER(name) = LOWER($3)`,
+              [amount_usdc, rules.userId, goal_name]
+            )
+          })
+        }
+        
+        return {
+          success: result.success,
+          tx_hash: result.txHash,
+          basescan_url: result.txHash ? `https://basescan.org/tx/${result.txHash}` : undefined,
+          amount_usdc,
+          error: result.error,
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          error: err instanceof ValidationError ? err.message : `Deposit failed: ${err.message}`,
+        }
       }
     }
 
     case 'sweep_idle_usdc': {
-      const { amount_usdc } = args
-      const goals = await sql`SELECT * FROM goals WHERE user_id = ${rules.userId} AND deposited_amount < target_amount ORDER BY priority ASC LIMIT 1` 
-      if (!goals.length) return { success: false, error: 'No active goals' }
-      const result = await executeRealDeposit(rules.userId, rules.walletAddress, amount_usdc)
-      if (result.success) {
-        await sql`UPDATE agent_rules SET spent_this_month = spent_this_month + ${amount_usdc}, updated_at = now() WHERE user_id = ${rules.userId}` 
-        await sql`UPDATE goals SET deposited_amount = deposited_amount + ${amount_usdc} WHERE id = ${goals[0].id}` 
-      }
-      return {
-        success: result.success,
-        tx_hash: result.txHash,
-        basescan_url: result.txHash ? `https://basescan.org/tx/${result.txHash}` : undefined,
-        amount_usdc,
-        error: result.error,
+      try {
+        const amount_usdc = validateAmount(args.amount_usdc, 0.01)
+        
+        const goals = await query<{ id: string }>(
+          `SELECT * FROM goals WHERE user_id = $1 AND deposited_amount < target_amount ORDER BY priority ASC LIMIT 1`,
+          [rules.userId]
+        )
+        
+        if (!goals.length) return { success: false, error: 'No active goals' }
+        
+        const result = await executeRealDeposit(rules.userId, rules.walletAddress, amount_usdc)
+        
+        if (result.success) {
+          await withTransaction(async (trx) => {
+            await trx.query(
+              `UPDATE agent_rules SET spent_this_month = spent_this_month + $1, updated_at = now() WHERE user_id = $2`,
+              [amount_usdc, rules.userId]
+            )
+            await trx.query(
+              `UPDATE goals SET deposited_amount = deposited_amount + $1 WHERE id = $2`,
+              [amount_usdc, goals[0].id]
+            )
+          })
+        }
+        
+        return {
+          success: result.success,
+          tx_hash: result.txHash,
+          basescan_url: result.txHash ? `https://basescan.org/tx/${result.txHash}` : undefined,
+          amount_usdc,
+          error: result.error,
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          error: err instanceof ValidationError ? err.message : `Sweep failed: ${err.message}`,
+        }
       }
     }
 
     case 'protect_streak': {
-      const AMOUNT = 1.0
-      const goals = await sql`SELECT * FROM goals WHERE user_id = ${rules.userId} AND LOWER(name) NOT LIKE '%emergency%' AND deposited_amount < target_amount ORDER BY priority ASC LIMIT 1` 
-      if (!goals.length) return { success: false, error: 'No eligible goal for streak protection' }
-      const result = await executeRealDeposit(rules.userId, rules.walletAddress, AMOUNT)
-      if (result.success) {
-        await sql`UPDATE agent_rules SET spent_this_month = spent_this_month + ${AMOUNT}, updated_at = now() WHERE user_id = ${rules.userId}` 
-        await sql`UPDATE goals SET deposited_amount = deposited_amount + ${AMOUNT} WHERE id = ${goals[0].id}` 
-      }
-      return {
-        success: result.success,
-        tx_hash: result.txHash,
-        basescan_url: result.txHash ? `https://basescan.org/tx/${result.txHash}` : undefined,
-        amount_usdc: AMOUNT,
-        error: result.error,
+      try {
+        const AMOUNT = 1.0
+        
+        const goals = await query<{ id: string }>(
+          `SELECT * FROM goals WHERE user_id = $1 AND LOWER(name) NOT LIKE '%emergency%' AND deposited_amount < target_amount ORDER BY priority ASC LIMIT 1`,
+          [rules.userId]
+        )
+        
+        if (!goals.length) return { success: false, error: 'No eligible goal for streak protection' }
+        
+        const result = await executeRealDeposit(rules.userId, rules.walletAddress, AMOUNT)
+        
+        if (result.success) {
+          await withTransaction(async (trx) => {
+            await trx.query(
+              `UPDATE agent_rules SET spent_this_month = spent_this_month + $1, updated_at = now() WHERE user_id = $2`,
+              [AMOUNT, rules.userId]
+            )
+            await trx.query(
+              `UPDATE goals SET deposited_amount = deposited_amount + $1 WHERE id = $2`,
+              [AMOUNT, goals[0].id]
+            )
+          })
+        }
+        
+        return {
+          success: result.success,
+          tx_hash: result.txHash,
+          basescan_url: result.txHash ? `https://basescan.org/tx/${result.txHash}` : undefined,
+          amount_usdc: AMOUNT,
+          error: result.error,
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          error: err instanceof ValidationError ? err.message : `Streak protection failed: ${err.message}`,
+        }
       }
     }
 
     case 'send_notification': {
-      const { message, urgency } = args
-      await sql`INSERT INTO agent_logs (user_id, tool_name, input, result, reason) VALUES (${rules.userId}, 'notify', ${JSON.stringify(args)}, ${JSON.stringify({ notified: true, urgency })}, ${message})` 
-      return { success: true, notified: true }
+      try {
+        const { message, urgency } = args
+        await query(
+          `INSERT INTO agent_logs (user_id, tool_name, input, result, reason) VALUES ($1, 'notify', $2, $3, $4)`,
+          [rules.userId, JSON.stringify(args), JSON.stringify({ notified: true, urgency }), message]
+        )
+        return { success: true, notified: true }
+      } catch (err: any) {
+        return { success: false, error: `Notification failed: ${err.message}` }
+      }
     }
 
     default:
       return { success: false, error: `Unknown tool: ${toolName}` }
   }
+}
+
+// Cleanup function for graceful shutdown
+export async function cleanup(): Promise<void> {
+  logger.info('Cleaning up executor resources...')
+  await closePool()
+  logger.info('Executor cleanup complete')
 }
