@@ -82,6 +82,8 @@ export function AgentPanel() {
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [withdrawSuccess, setWithdrawSuccess] = useState<{txHash: string; amount: number; slippage?: number} | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   const [rules, setRules] = useState({
     autopilot: false,
     scheduledDay: 'Monday',
@@ -157,14 +159,26 @@ export function AgentPanel() {
       return;
     }
     setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
     try {
-      await fetch('/api/agent/rules', {
+      const res = await fetch('/api/agent/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, walletAddress, selectedGoal, ...rules }),
       });
-    } catch (err) {
+      
+      const data = await res.json().catch(() => ({ error: 'Invalid response from server' }));
+      
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to save: ${res.status}`);
+      }
+      
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err: any) {
       console.error('Failed to save rules:', err);
+      setSaveError(err.message || 'Failed to save rules');
     }
     setSaving(false);
   }
@@ -225,7 +239,17 @@ export function AgentPanel() {
         }),
       });
 
-      const data = await res.json();
+      // Check if response is ok before parsing JSON
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => 'Unknown error');
+        throw new Error(`Server error ${res.status}: ${errorText}`);
+      }
+
+      const data = await res.json().catch(() => ({ error: 'Invalid JSON response from server' }));
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
       
       if (data.results?.[0]?.actions?.[0]?.result?.success) {
         const result = data.results[0].actions[0].result;
@@ -289,7 +313,17 @@ export function AgentPanel() {
         }),
       });
 
-      const data = await res.json();
+      // Check if response is ok before parsing JSON
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => 'Unknown error');
+        throw new Error(`Server error ${res.status}: ${errorText}`);
+      }
+
+      const data = await res.json().catch(() => ({ error: 'Invalid JSON response from server' }));
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
       
       if (data.results?.[0]?.actions?.[0]?.result?.success) {
         const result = data.results[0].actions[0].result;
@@ -818,6 +852,18 @@ export function AgentPanel() {
               </div>
 
               {/* Save Button */}
+              {saveError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded-lg">
+                  <XCircle className="w-4 h-4" />
+                  {saveError}
+                </div>
+              )}
+              {saveSuccess && (
+                <div className="flex items-center gap-2 text-green-600 text-sm bg-green-50 dark:bg-green-900/20 p-3 rounded-lg">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Rules saved successfully!
+                </div>
+              )}
               <Button onClick={saveRules} disabled={saving} className="w-full">
                 {saving ? (
                   <>
