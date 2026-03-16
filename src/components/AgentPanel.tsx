@@ -135,12 +135,13 @@ export function AgentPanel() {
         setGoals(data);
         if (!selectedGoal) setSelectedGoal(data[0].name);
       } else {
-        setGoals([{ id: 'default', name: 'General Savings', deposited_amount: 0, target_amount: 1000 }]);
-        if (!selectedGoal) setSelectedGoal('General Savings');
+        setGoals([]);
+        setSelectedGoal('');
       }
     } catch (err) {
       console.error('Failed to fetch goals:', err);
-      setGoals([{ id: 'default', name: 'General Savings', deposited_amount: 0, target_amount: 1000 }]);
+      setGoals([]);
+      setSelectedGoal('');
     }
   }
 
@@ -422,17 +423,30 @@ export function AgentPanel() {
         <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
           Selected Goal
         </label>
-        <select
-          value={selectedGoal}
-          onChange={(e) => setSelectedGoal(e.target.value)}
-          className="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-        >
-          {goals.map(goal => (
-            <option key={goal.id} value={goal.name}>
-              {goal.name} (${goal.deposited_amount?.toFixed(2) ?? '0.00'} / ${goal.target_amount?.toFixed(0) ?? '0'})
-            </option>
-          ))}
-        </select>
+        {goals.length > 0 ? (
+          <select
+            value={selectedGoal}
+            onChange={(e) => setSelectedGoal(e.target.value)}
+            className="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+          >
+            {goals.map(goal => (
+              <option key={goal.id} value={goal.name}>
+                {goal.name} (${goal.deposited_amount?.toFixed(2) ?? '0.00'} / ${goal.target_amount?.toFixed(0) ?? '0'})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <div className="text-center py-4">
+            <p className="text-neutral-500 dark:text-neutral-400 mb-2">No goals created yet</p>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => setActiveTab ? setActiveTab('goals') : null}
+            >
+              Create Your First Goal
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Deposit & Withdraw Cards */}
