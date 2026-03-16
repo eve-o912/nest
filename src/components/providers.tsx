@@ -13,7 +13,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           logo: '/nest-logo.png',
         },
         embeddedWallets: {
-          createOnLogin: 'users-without-wallets',
+          createOnLogin: 'all-users', // Allow external wallets to connect
         },
         defaultChain: {
           id: 8453,
