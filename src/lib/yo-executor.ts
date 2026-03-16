@@ -10,7 +10,7 @@ import { withRetry, withCircuitBreaker, withTimeout, logger, RetryableError } fr
 import { withTransaction, query, queryOne, closePool } from './db'
 import { validateWalletAddress, validateAmount, ValidationError } from './validation'
 
-const YOUSD_VAULT  = '0x0000000F926268Be77AB7E1d17E4E4C7d4B28A65'
+const YOUSD_VAULT  = '0x0000000F926268Be77AB7e1d17E4E4c7D4b28A65'
 const YOGATEWAY    = '0xF1EeE0957267b1A474323Ff9CfF7719E964969FA'
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 const USDC_DECIMALS = 6
