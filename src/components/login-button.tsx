@@ -24,6 +24,7 @@ export function LoginButton() {
           {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : user.email?.address || 'Connected'}
         </span>
         <Button onClick={logout} variant="outline" size="sm">
+          <Wallet className="w-4 h-4 mr-2" />
           Disconnect
         </Button>
       </div>
@@ -31,7 +32,7 @@ export function LoginButton() {
   }
 
   return (
-    <Button onClick={login} size="sm">
+    <Button onClick={login} size="sm" className="bg-gradient-to-r from-yellow-400 to-yellow-600 hover:from-yellow-500 hover:to-yellow-700">
       <Wallet className="w-4 h-4 mr-2" />
       Connect Wallet
     </Button>

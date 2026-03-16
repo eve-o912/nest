@@ -515,7 +515,7 @@ export function AgentPanel() {
 
               <Button 
                 onClick={handleDepositClick} 
-                disabled={depositing || balances.walletUSDC < depositAmount}
+                disabled={depositing || (balances?.walletUSDC ?? 0) < depositAmount}
                 className="w-full"
               >
                 {depositing ? (
@@ -614,7 +614,7 @@ export function AgentPanel() {
 
               <Button 
                 onClick={handleWithdrawClick} 
-                disabled={withdrawing || balances.vault < withdrawAmount}
+                disabled={withdrawing || (balances?.vault ?? 0) < withdrawAmount}
                 variant="outline"
                 className="w-full border-red-200 hover:bg-red-50 text-red-600"
               >

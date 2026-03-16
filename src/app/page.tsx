@@ -216,9 +216,7 @@ export default function NestApp() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-                <Wallet className="w-5 h-5 text-white" />
-              </div>
+              <img src="/nest-logo.png" alt="Nest" className="w-10 h-10" />
               <div>
                 <h1 className="font-bold text-xl text-neutral-900 dark:text-white">Nest</h1>
                 <p className="text-xs text-neutral-500">Goal-based DeFi savings</p>
@@ -232,7 +230,7 @@ export default function NestApp() {
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                     activeTab === tab.id
-                      ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                      ? 'bg-yellow-50 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400'
                       : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
                   }`}
                 >
@@ -272,7 +270,7 @@ export default function NestApp() {
                     }}
                     className={`flex items-center gap-3 w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
                       activeTab === tab.id
-                        ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                        ? 'bg-yellow-50 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400'
                         : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
                     }`}
                   >
