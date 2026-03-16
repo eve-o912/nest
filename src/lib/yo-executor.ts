@@ -579,7 +579,8 @@ export async function executeTool(
   const moneyTools = ['deposit_to_goal', 'sweep_idle_usdc', 'protect_streak']
 
   if (moneyTools.includes(toolName)) {
-    if (!rules.autopilot) {
+    // Allow manual deposits even if autopilot is OFF
+    if (!rules.autopilot && toolName !== 'deposit_to_goal') {
       return { success: true, skipped: true, skip_reason: 'Autopilot OFF — notify only' }
     }
     const amount = args.amount_usdc ?? 1
