@@ -438,13 +438,7 @@ export function AgentPanel() {
         ) : (
           <div className="text-center py-4">
             <p className="text-neutral-500 dark:text-neutral-400 mb-2">No goals created yet</p>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => setActiveTab ? setActiveTab('goals') : null}
-            >
-              Create Your First Goal
-            </Button>
+            <p className="text-xs text-neutral-400">Go to the Goals tab to create your first goal</p>
           </div>
         )}
       </div>
