@@ -61,6 +61,15 @@ export function AgentPanel() {
   const userId = user?.id;
   const walletAddress = user?.wallet?.address;
 
+  // Debug wallet address format
+  useEffect(() => {
+    console.log('=== WALLET DEBUG ===');
+    console.log('Wallet address:', walletAddress);
+    console.log('Wallet type:', user?.wallet?.walletClientType);
+    console.log('User ID:', userId);
+    console.log('Full user object:', user);
+  }, [userId, walletAddress]);
+
   const [tab, setTab] = useState<'setup' | 'activity'>('setup');
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);

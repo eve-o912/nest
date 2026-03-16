@@ -110,6 +110,7 @@ export interface ToolResult {
   tx_hash?: string
   basescan_url?: string
   amount_usdc?: number
+  slippage_bps?: number
   error?: string
   notified?: boolean
   skipped?: boolean
@@ -120,6 +121,9 @@ export interface ToolResult {
 
 export async function getLiveUSDCBalance(address: string): Promise<number> {
   try {
+    if (!address || address === 'undefined' || address.length < 10) {
+      throw new Error(`Invalid address provided: "${address}"`)
+    }
     const validatedAddress = validateWalletAddress(address)
     const raw = await withRetry(
       () => publicClient.readContract({
@@ -131,9 +135,16 @@ export async function getLiveUSDCBalance(address: string): Promise<number> {
       { maxAttempts: 3, delayMs: 1000 }
     )
     return Number(formatUnits(raw, USDC_DECIMALS))
-  } catch (err) {
-    logger.error('Failed to get USDC balance', err, { address })
-    throw new RetryableError('Failed to read USDC balance')
+  } catch (err: any) {
+    // Log the FULL error details
+    logger.error('Failed to get USDC balance', err, { 
+      address,
+      rpcUrl: process.env.BASE_RPC_URL,
+      errorMessage: err?.message,
+      errorCause: err?.cause?.message,
+      errorDetails: JSON.stringify(err, null, 2)
+    })
+    throw new Error(`USDC balance read failed: ${err?.message} | cause: ${err?.cause?.message}`)
   }
 }
 
