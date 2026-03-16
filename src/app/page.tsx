@@ -31,6 +31,7 @@ import { Onboarding } from '@/components/onboarding';
 import { GoalModal } from '@/components/goal-modal';
 import { AgentPanel } from '@/components/AgentPanel';
 import { LoginButton } from '@/components/login-button';
+import { usePrivy } from '@privy-io/react-auth';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -44,6 +45,8 @@ const TABS = [
 ];
 
 export default function NestApp() {
+  const { user, authenticated, ready } = usePrivy();
+  const userId = user?.id;
   const [activeTab, setActiveTab] = useState('overview');
   const [isOnboarding, setIsOnboarding] = useState(false);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
