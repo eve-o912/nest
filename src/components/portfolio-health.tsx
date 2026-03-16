@@ -7,10 +7,18 @@ import { formatCurrency, calculateProgress, getDaysUntilDate, calculateMonthsToG
 import { Card, CardContent, CardHeader, Badge, Progress } from '@/components/ui';
 
 interface PortfolioHealthProps {
-  portfolio: Portfolio;
+  portfolio: Portfolio | null;
 }
 
 export function PortfolioHealth({ portfolio }: PortfolioHealthProps) {
+  if (!portfolio) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-neutral-500">Loading portfolio data...</div>
+      </div>
+    );
+  }
+  
   const goals = portfolio.goals;
   const totalMonthly = goals.reduce((sum, g) => sum + g.monthlyPledge, 0);
   const hasEmergencyFund = goals.some(g => g.name.toLowerCase().includes('emergency'));

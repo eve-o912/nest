@@ -8,10 +8,18 @@ import { calculateYieldBreakdown } from '@/lib/data';
 import { Card, CardContent, CardHeader, Button, Badge, Progress } from '@/components/ui';
 
 interface StreaksViewProps {
-  portfolio: Portfolio;
+  portfolio: Portfolio | null;
 }
 
 export function StreaksView({ portfolio }: StreaksViewProps) {
+  if (!portfolio) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-neutral-500">Loading portfolio data...</div>
+      </div>
+    );
+  }
+  
   const { currentStreak, longestStreak, weeklyDepositAverage, totalBalance, baseApy } = portfolio;
   
   // Calculate streak impact

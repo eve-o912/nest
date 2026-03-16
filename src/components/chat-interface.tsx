@@ -8,7 +8,7 @@ import { Button } from '@/components/ui';
 import { generateAIResponse } from '@/lib/ai-responses';
 
 interface ChatInterfaceProps {
-  portfolio: Portfolio;
+  portfolio: Portfolio | null;
 }
 
 const SUGGESTED_QUESTIONS = [
@@ -37,8 +37,8 @@ export function ChatInterface({ portfolio }: ChatInterfaceProps) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
-  function getWelcomeMessage(portfolio: Portfolio): string {
-    if (portfolio.totalBalance === 0) {
+  function getWelcomeMessage(portfolio: Portfolio | null): string {
+    if (!portfolio || portfolio.totalBalance === 0) {
       return "Hey there! Welcome to Nest. I'm your savings coach — here to help you build wealth with DeFi. Ready to create your first goal and start earning 6%+ APY?";
     }
     

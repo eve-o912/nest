@@ -7,10 +7,18 @@ import { calculateYieldBreakdown, formatCurrency, formatPercent } from '@/lib/da
 import { Card, CardContent, CardHeader, Badge, Progress } from '@/components/ui';
 
 interface YieldDashboardProps {
-  portfolio: Portfolio;
+  portfolio: Portfolio | null;
 }
 
 export function YieldDashboard({ portfolio }: YieldDashboardProps) {
+  if (!portfolio) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-neutral-500">Loading portfolio data...</div>
+      </div>
+    );
+  }
+  
   const breakdown = calculateYieldBreakdown(portfolio.totalBalance, portfolio.baseApy);
   const lockedAmount = portfolio.goals.reduce((sum, g) => sum + (g.lockPeriod ? g.depositedAmount : 0), 0);
   const unlockedAmount = portfolio.totalBalance - lockedAmount;
