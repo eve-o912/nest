@@ -391,14 +391,14 @@ export function AgentPanel() {
         <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
           <p className="text-sm text-neutral-500 mb-1">Vault Balance</p>
           <p className="text-2xl font-bold text-neutral-900 dark:text-white">
-            ${balances.vault.toFixed(2)}
+            ${balances?.vault?.toFixed(2) ?? '0.00'}
           </p>
           <p className="text-xs text-neutral-400">yoUSD on Base</p>
         </div>
         <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
           <p className="text-sm text-neutral-500 mb-1">Wallet USDC</p>
           <p className="text-2xl font-bold text-neutral-900 dark:text-white">
-            ${balances.walletUSDC.toFixed(2)}
+            ${balances?.walletUSDC?.toFixed(2) ?? '0.00'}
           </p>
           <p className="text-xs text-neutral-400">Available to deposit</p>
         </div>
@@ -407,7 +407,7 @@ export function AgentPanel() {
             <Fuel className="w-3 h-3" /> ETH Balance
           </p>
           <p className={`text-2xl font-bold ${hasLowGas ? 'text-red-600' : 'text-neutral-900 dark:text-white'}`}>
-            {parseFloat(balances.eth).toFixed(4)}
+            {parseFloat(balances?.eth ?? '0').toFixed(4)}
           </p>
           {hasLowGas && (
             <p className="text-xs text-red-600">⚠️ Need ETH for gas fees</p>
@@ -427,7 +427,7 @@ export function AgentPanel() {
         >
           {goals.map(goal => (
             <option key={goal.id} value={goal.name}>
-              {goal.name} (${goal.deposited_amount.toFixed(2)} / ${goal.target_amount.toFixed(0)})
+              {goal.name} (${goal.deposited_amount?.toFixed(2) ?? '0.00'} / ${goal.target_amount?.toFixed(0) ?? '0'})
             </option>
           ))}
         </select>
@@ -497,7 +497,7 @@ export function AgentPanel() {
                   </button>
                 </div>
                 <p className="text-xs text-neutral-500 mt-1">
-                  Available: ${balances.walletUSDC.toFixed(2)} USDC
+                  Available: ${balances?.walletUSDC?.toFixed(2) ?? '0.00'} USDC
                 </p>
               </div>
 
@@ -596,7 +596,7 @@ export function AgentPanel() {
                   </button>
                 </div>
                 <p className="text-xs text-neutral-500 mt-1">
-                  Available: ${balances.vault.toFixed(2)} USDC
+                  Available: ${balances?.vault?.toFixed(2) ?? '0.00'} USDC
                 </p>
               </div>
 
