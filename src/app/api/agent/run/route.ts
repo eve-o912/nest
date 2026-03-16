@@ -94,7 +94,20 @@ export async function POST(req: Request) {
     if (!rows.length) {
       return Response.json({ error: 'User not found. Please setup agent rules first.' }, { status: 404 })
     }
-    const rules = rows[0] as AgentRules
+    // Map snake_case database columns to camelCase
+    const dbRules = rows[0]
+    const rules: AgentRules = {
+      userId: dbRules.user_id,
+      walletAddress: dbRules.wallet_address,
+      autopilot: dbRules.autopilot,
+      scheduledDay: dbRules.scheduled_day,
+      scheduledAmount: dbRules.scheduled_amount,
+      monthlyBudget: dbRules.monthly_budget,
+      spentThisMonth: dbRules.spent_this_month,
+      streakProtection: dbRules.streak_protection,
+      idleSweepDays: dbRules.idle_sweep_days,
+      enabled: dbRules.enabled,
+    }
     const { tool, args } = body.forceAction
     
     try {
