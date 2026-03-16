@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { 
   Bot, 
   Settings, 
@@ -12,6 +12,7 @@ import {
   Wallet,
   TrendingUp,
   Shield,
+  Flame,
   Bell,
   CheckCircle2,
   XCircle,
@@ -20,8 +21,16 @@ import {
   Sparkles,
   Info,
   ArrowRightLeft,
-  Fuel
+  Fuel,
+  ArrowRight,
+  ChevronDown,
+  X,
+  Plus,
+  Minus,
+  Send,
 } from 'lucide-react';
+import { createWalletClient, createPublicClient, custom, http, parseUnits, encodeFunctionData } from 'viem';
+import { base } from 'viem/chains';
 import { Button } from '@/components/ui';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -58,8 +67,17 @@ interface Goal {
 
 export function AgentPanel() {
   const { user, authenticated, ready } = usePrivy();
+  const { wallets } = useWallets();
   const userId = user?.id;
   const walletAddress = user?.wallet?.address;
+  
+  const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
+  const YOUSD_VAULT = '0x0000000f926268be77Ab7e1d17E4e4C7D4b28a65' as const;
+
+  const viemPublicClient = createPublicClient({
+    chain: base,
+    transport: http('https://mainnet.base.org'),
+  });
 
   // Debug wallet address format
   useEffect(() => {
@@ -123,6 +141,88 @@ export function AgentPanel() {
     const interval = setInterval(fetchBalances, 30000);
     return () => clearInterval(interval);
   }, [userId, walletAddress]);
+
+  async function executeDepositClientSide(amount: number, goalName: string) {
+    const wallet = wallets.find(w => w.address.toLowerCase() === walletAddress?.toLowerCase());
+    if (!wallet) throw new Error('Wallet not found');
+
+    // Switch to Base
+    await wallet.switchChain(8453);
+
+    const provider = await wallet.getEthereumProvider();
+    const walletClient = createWalletClient({
+      chain: base,
+      transport: custom(provider),
+    });
+
+    const [address] = await walletClient.getAddresses();
+    const amountRaw = parseUnits(amount.toFixed(6), 6);
+
+    // Check allowance
+    const allowance = await viemPublicClient.readContract({
+      address: USDC_ADDRESS,
+      abi: [{
+        name: 'allowance', type: 'function', stateMutability: 'view',
+        inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }],
+        outputs: [{ name: '', type: 'uint256' }],
+      }] as const,
+      functionName: 'allowance',
+      args: [address, YOUSD_VAULT],
+    });
+
+    // Approve if needed
+    if (allowance < amountRaw) {
+      const approveTxHash = await walletClient.sendTransaction({
+        account: address,
+        to: USDC_ADDRESS,
+        data: encodeFunctionData({
+          abi: [{
+              name: 'approve', type: 'function', stateMutability: 'nonpayable',
+              inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }],
+              outputs: [{ name: '', type: 'bool' }],
+            }] as const,
+          functionName: 'approve',
+          args: [YOUSD_VAULT, amountRaw],
+        }),
+      });
+      await viemPublicClient.waitForTransactionReceipt({ hash: approveTxHash });
+    }
+
+    // Deposit
+    const depositTxHash = await walletClient.sendTransaction({
+      account: address,
+      to: YOUSD_VAULT,
+      data: encodeFunctionData({
+        abi: [{
+            name: 'deposit', type: 'function', stateMutability: 'nonpayable',
+            inputs: [{ name: 'assets', type: 'uint256' }, { name: 'receiver', type: 'address' }],
+            outputs: [{ name: '', type: 'uint256' }],
+          }] as const,
+        functionName: 'deposit',
+        args: [amountRaw, address],
+      }),
+    });
+
+    const receipt = await viemPublicClient.waitForTransactionReceipt({ hash: depositTxHash });
+    if (receipt.status !== 'success') throw new Error('Transaction reverted');
+
+    // Record in DB via lightweight endpoint
+    await fetch('/api/agent/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        recordDeposit: {
+          walletAddress,
+          goalName,
+          amountUsdc: amount,
+          txHash: depositTxHash,
+        }
+      }),
+    });
+
+    return depositTxHash;
+  }
 
   async function fetchBalances() {
     if (!walletAddress) return;
@@ -234,49 +334,48 @@ export function AgentPanel() {
     setDepositError(null);
     setDepositSuccess(null);
 
+    const isEmbedded = user?.wallet?.walletClientType === 'privy';
+
     try {
+      if (!isEmbedded) {
+        // MetaMask or other external wallet — sign in browser
+        const txHash = await executeDepositClientSide(depositAmount, selectedGoal);
+        setDepositSuccess({ txHash, amount: depositAmount });
+        await fetchLogs();
+        await fetchBalances();
+        return;
+      }
+
+      // Privy embedded wallet — server-side signing (existing flow)
       const res = await fetch('/api/agent/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           userId,
           forceAction: {
             tool: 'deposit_to_goal',
             args: {
               goal_name: selectedGoal,
               amount_usdc: depositAmount,
-              reason: `Manual deposit of $${depositAmount} to ${selectedGoal}`
+              reason: `Manual deposit of $${depositAmount} to ${selectedGoal}` 
             }
           }
         }),
       });
 
-      // Check if response is ok before parsing JSON
       if (!res.ok) {
         const errorText = await res.text().catch(() => 'Unknown error');
         throw new Error(`Server error ${res.status}: ${errorText}`);
       }
 
-      const data = await res.json().catch(() => ({ error: 'Invalid JSON response from server' }));
-      
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      
+      const data = await res.json();
       if (data.results?.[0]?.actions?.[0]?.result?.success) {
         const result = data.results[0].actions[0].result;
-        setDepositSuccess({
-          txHash: result.tx_hash!,
-          amount: result.amount_usdc!,
-          slippage: result.slippage_bps
-        });
+        setDepositSuccess({ txHash: result.tx_hash!, amount: result.amount_usdc! });
         await fetchLogs();
         await fetchBalances();
       } else {
-        const error = data.results?.[0]?.actions?.[0]?.result?.error 
-          || data.results?.[0]?.error 
-          || 'Deposit failed';
-        setDepositError(error);
+        throw new Error(data.results?.[0]?.error || 'Deposit failed');
       }
     } catch (err: any) {
       setDepositError(err.message || 'Deposit failed');

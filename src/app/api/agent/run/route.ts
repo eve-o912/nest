@@ -84,9 +84,30 @@ const AGENT_TOOLS = [{
   ],
 }]
 
-export async function POST(req: Request) {
-  const isCron = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}` 
+export const POST = withSecurity(async (req: Request) => {
   const body = await req.json().catch(() => ({}))
+
+  // Handle client-side deposit recording (MetaMask flow)
+  if (body.recordDeposit && body.userId) {
+    const { walletAddress, goalName, amountUsdc, txHash } = body.recordDeposit;
+    await query(
+      `INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
+       VALUES ($1, 'deposit_to_goal', $2, $3, $4, $5)`,
+      [
+        body.userId,
+        JSON.stringify({ goal_name: goalName, amount_usdc: amountUsdc }),
+        JSON.stringify({ success: true, amount_usdc: amountUsdc, tx_hash: txHash }),
+        `Manual deposit of $${amountUsdc} to ${goalName}`,
+        txHash,
+      ]
+    );
+    await query(
+      `UPDATE goals SET deposited_amount = deposited_amount + $1 
+       WHERE user_id = $2 AND LOWER(name) = LOWER($3)`,
+      [amountUsdc, body.userId, goalName]
+    );
+    return Response.json({ success: true, tx_hash: txHash });
+  }
 
   // Handle manual forced actions (e.g., direct deposit from UI)
   if (body.forceAction && body.userId) {
