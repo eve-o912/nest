@@ -28,3 +28,31 @@ export const GET = withSecurity(async (req: Request) => {
     }, { status: 500 })
   }
 })
+
+export const POST = withSecurity(async (req: Request) => {
+  try {
+    const body = await req.json()
+    const { userId, name, emoji, targetAmount, depositedAmount, targetDate, monthlyPledge, assetType } = body
+    
+    if (!userId || !name || !targetAmount) {
+      return Response.json({ error: 'userId, name, and targetAmount are required' }, { status: 400 })
+    }
+    
+    const result = await query(
+      `INSERT INTO goals (
+        user_id, name, emoji, target_amount, deposited_amount, 
+        target_date, monthly_pledge, asset_type, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+      RETURNING id, name, emoji, target_amount, deposited_amount, target_date, monthly_pledge, asset_type, created_at`,
+      [userId, name, emoji || '🎯', targetAmount, depositedAmount || 0, targetDate, monthlyPledge || 0, assetType || 'USDC']
+    )
+    
+    logger.info('Created goal', { userId, name, targetAmount })
+    return Response.json(result[0])
+  } catch (err: any) {
+    logger.error('Failed to create goal', err)
+    return Response.json({ 
+      error: err.message || 'Failed to create goal' 
+    }, { status: 500 })
+  }
+})

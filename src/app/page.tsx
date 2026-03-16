@@ -51,6 +51,30 @@ export default function NestApp() {
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
 
+  // Fetch goals from database when user is authenticated
+  useEffect(() => {
+    if (!userId) return;
+    
+    const fetchGoals = async () => {
+      try {
+        const res = await fetch(`/api/goals?userId=${userId}`);
+        if (res.ok) {
+          const goals = await res.json();
+          // Update portfolio with fetched goals
+          setPortfolio(prev => prev ? {
+            ...prev,
+            goals: goals,
+            totalBalance: goals.reduce((sum: number, g: any) => sum + (g.deposited_amount || 0), 0),
+          } : null);
+        }
+      } catch (err) {
+        console.error('Failed to fetch goals:', err);
+      }
+    };
+
+    fetchGoals();
+  }, [userId]);
+
   const handleAddGoal = () => {
     setEditingGoal(null);
     setIsGoalModalOpen(true);
@@ -61,36 +85,55 @@ export default function NestApp() {
     setIsGoalModalOpen(true);
   };
 
-  const handleSaveGoal = (goalData: Partial<Goal>) => {
-    if (!portfolio) return;
-    
-    if (editingGoal) {
-      setPortfolio({
-        ...portfolio,
-        goals: portfolio.goals.map((g: Goal) =>
-          g.id === editingGoal.id ? { ...g, ...goalData } as Goal : g
-        ),
-      });
-    } else {
-      const newGoal: Goal = {
-        id: `goal_${Date.now()}`,
-        name: goalData.name || 'New Goal',
-        emoji: goalData.emoji || '🎯',
-        targetAmount: goalData.targetAmount || 0,
-        depositedAmount: goalData.depositedAmount || 0,
-        targetDate: goalData.targetDate || '',
-        monthlyPledge: goalData.monthlyPledge || 0,
-        assetType: goalData.assetType || 'USDC',
-        apy: 6.2,
-        createdAt: new Date().toISOString(),
-        ...goalData,
-      } as Goal;
-      
-      setPortfolio({
-        ...portfolio,
-        goals: [...portfolio.goals, newGoal],
-        totalBalance: portfolio.totalBalance + (newGoal.depositedAmount || 0),
-      });
+  const handleSaveGoal = async (goalData: Partial<Goal>) => {
+    if (!userId) {
+      alert('Please connect your wallet first');
+      return;
+    }
+
+    try {
+      if (editingGoal) {
+        // TODO: Add PUT endpoint for updating goals
+        setPortfolio({
+          ...portfolio,
+          goals: portfolio?.goals?.map((g: Goal) =>
+            g.id === editingGoal.id ? { ...g, ...goalData } as Goal : g
+          ) ?? [],
+        });
+      } else {
+        // Create new goal in database
+        const res = await fetch('/api/goals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            name: goalData.name || 'New Goal',
+            emoji: goalData.emoji || '🎯',
+            targetAmount: goalData.targetAmount || 0,
+            depositedAmount: goalData.depositedAmount || 0,
+            targetDate: goalData.targetDate || '',
+            monthlyPledge: goalData.monthlyPledge || 0,
+            assetType: goalData.assetType || 'USDC',
+          }),
+        });
+
+        if (!res.ok) {
+          const error = await res.json();
+          throw new Error(error.error || 'Failed to create goal');
+        }
+
+        const newGoal = await res.json();
+        
+        // Update local state with the new goal
+        setPortfolio(prev => prev ? {
+          ...prev,
+          goals: [...prev.goals, newGoal],
+          totalBalance: prev.totalBalance + (newGoal.deposited_amount || 0),
+        } : null);
+      }
+    } catch (err: any) {
+      console.error('Failed to save goal:', err);
+      alert(err.message || 'Failed to save goal');
     }
   };
 
