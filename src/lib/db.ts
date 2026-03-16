@@ -111,4 +111,4 @@ export function sql(strings: TemplateStringsArray, ...values: any[]) {
   return { text, values };
 }
 
-export { getPool };
+export { getPool, pool };

@@ -5,7 +5,6 @@ import { base } from 'viem/chains'
 
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 const YOUSD_VAULT = '0x0000000F926268Be77AB7e1d17E4E4c7D4b28A65'
-
 const VAULT_ABI = parseAbi([
   'function balanceOf(address owner) view returns (uint256)',
   'function convertToAssets(uint256 shares) view returns (uint256)',
@@ -37,7 +36,7 @@ export const GET = withSecurity(async (req: Request) => {
         abi: VAULT_ABI,
         functionName: 'balanceOf',
         args: [wallet as `0x${string}`],
-      }).catch(() => 0n),
+      }).catch(() => BigInt(0)),
       client.readContract({
         address: YOUSD_VAULT,
         abi: parseAbi(['function decimals() view returns (uint8)']),
