@@ -1,5 +1,7 @@
 'use client';
 
+export const dynamic = 'force-dynamic';
+
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -44,7 +46,7 @@ const TABS = [
 export default function NestApp() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isOnboarding, setIsOnboarding] = useState(false);
-  const [portfolio, setPortfolio] = useState(null);
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
@@ -60,10 +62,12 @@ export default function NestApp() {
   };
 
   const handleSaveGoal = (goalData: Partial<Goal>) => {
+    if (!portfolio) return;
+    
     if (editingGoal) {
       setPortfolio({
         ...portfolio,
-        goals: portfolio.goals.map((g) =>
+        goals: portfolio.goals.map((g: Goal) =>
           g.id === editingGoal.id ? { ...g, ...goalData } as Goal : g
         ),
       });
@@ -91,12 +95,14 @@ export default function NestApp() {
   };
 
   const handleLockGoal = (goalId: string, days: number) => {
+    if (!portfolio) return;
+    
     const lockExpiry = new Date();
     lockExpiry.setDate(lockExpiry.getDate() + days);
     
     setPortfolio({
       ...portfolio,
-      goals: portfolio.goals.map((g) =>
+      goals: portfolio.goals.map((g: Goal) =>
         g.id === goalId
           ? { ...g, lockPeriod: days, lockExpiry: lockExpiry.toISOString() }
           : g
@@ -119,25 +125,25 @@ export default function NestApp() {
                   Hey, welcome back! 👋
                 </h1>
                 <p className="text-neutral-600 dark:text-neutral-400">
-                  You have {portfolio.goals.length} active goals and ${portfolio.totalBalance.toFixed(2)} earning {portfolio.baseApy}% APY.
+                  You have {portfolio?.goals?.length ?? 0} active goals and ${portfolio?.totalBalance?.toFixed(2) ?? '0.00'} earning {portfolio?.baseApy ?? 0}% APY.
                 </p>
               </div>
               
               <div className="grid md:grid-cols-3 gap-4 mb-6">
                 <QuickStat
                   label="Total Balance"
-                  value={`$${portfolio.totalBalance.toFixed(2)}`}
-                  trend={`+${portfolio.totalEarnedYield.toFixed(2)} earned`}
+                  value={`$${portfolio?.totalBalance?.toFixed(2) ?? '0.00'}`}
+                  trend={`+${portfolio?.totalEarnedYield?.toFixed(2) ?? '0.00'} earned`}
                 />
                 <QuickStat
                   label="Current APY"
-                  value={`${portfolio.baseApy}%`}
+                  value={`${portfolio?.baseApy ?? 0}%`}
                   trend="Variable rate"
                 />
                 <QuickStat
                   label="Streak"
-                  value={`${portfolio.currentStreak} weeks`}
-                  trend={`Best: ${portfolio.longestStreak}`}
+                  value={`${portfolio?.currentStreak ?? 0} weeks`}
+                  trend={`Best: ${portfolio?.longestStreak ?? 0}`}
                 />
               </div>
 
@@ -150,7 +156,7 @@ export default function NestApp() {
                   </Button>
                 </div>
                 <div className="space-y-3">
-                  {portfolio.goals.slice(0, 3).map((goal) => (
+                  {(portfolio?.goals ?? []).slice(0, 3).map((goal: Goal) => (
                     <div
                       key={goal.id}
                       className="flex items-center gap-4 p-3 bg-neutral-50 dark:bg-neutral-800 rounded-xl"
@@ -174,14 +180,14 @@ export default function NestApp() {
               </div>
             </div>
             <div className="lg:w-1/3 h-[500px] lg:h-auto">
-              <ChatInterface portfolio={portfolio} />
+              <ChatInterface portfolio={portfolio ?? null} />
             </div>
           </div>
         );
       case 'goals':
         return (
           <GoalsView
-            goals={portfolio.goals}
+            goals={portfolio?.goals ?? []}
             onAddGoal={handleAddGoal}
             onEditGoal={handleEditGoal}
           />
@@ -189,19 +195,19 @@ export default function NestApp() {
       case 'agent':
         return <AgentPanel />;
       case 'yield':
-        return <YieldDashboard portfolio={portfolio} />;
+        return <YieldDashboard portfolio={portfolio ?? null} />;
       case 'locks':
         return (
           <LockPeriods
-            goals={portfolio.goals}
-            baseApy={portfolio.baseApy}
+            goals={portfolio?.goals ?? []}
+            baseApy={portfolio?.baseApy ?? 0}
             onLockGoal={handleLockGoal}
           />
         );
       case 'health':
-        return <PortfolioHealth portfolio={portfolio} />;
+        return <PortfolioHealth portfolio={portfolio ?? null} />;
       case 'streaks':
-        return <StreaksView portfolio={portfolio} />;
+        return <StreaksView portfolio={portfolio ?? null} />;
       case 'risks':
         return <RiskEducation />;
       default:
