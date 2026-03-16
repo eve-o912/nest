@@ -16,7 +16,6 @@ import {
   ChevronRight,
   Sparkles,
 } from 'lucide-react';
-import { mockPortfolio } from '@/lib/data';
 import { Goal } from '@/lib/types';
 import { Button } from '@/components/ui';
 import { ChatInterface } from '@/components/chat-interface';
@@ -45,7 +44,7 @@ const TABS = [
 export default function NestApp() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isOnboarding, setIsOnboarding] = useState(false);
-  const [portfolio, setPortfolio] = useState(mockPortfolio);
+  const [portfolio, setPortfolio] = useState(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);

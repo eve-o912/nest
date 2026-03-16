@@ -66,7 +66,7 @@ export function AgentPanel() {
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [selectedGoal, setSelectedGoal] = useState('General Savings');
+  const [selectedGoal, setSelectedGoal] = useState('');
   const [balances, setBalances] = useState<Balances>({ vault: 0, walletUSDC: 0, eth: '0' });
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<'deposit' | 'withdraw' | null>(null);
@@ -133,8 +133,10 @@ export function AgentPanel() {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
         setGoals(data);
+        if (!selectedGoal) setSelectedGoal(data[0].name);
       } else {
         setGoals([{ id: 'default', name: 'General Savings', deposited_amount: 0, target_amount: 1000 }]);
+        if (!selectedGoal) setSelectedGoal('General Savings');
       }
     } catch (err) {
       console.error('Failed to fetch goals:', err);
