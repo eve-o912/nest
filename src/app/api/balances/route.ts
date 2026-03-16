@@ -4,7 +4,7 @@ import { createPublicClient, http, parseAbi, formatEther } from 'viem'
 import { base } from 'viem/chains'
 
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-const YOUSD_VAULT = '0x0000000f926268be77AB7E1d17e4e4c7d4b28a65'
+const YOUSD_VAULT = '0x0000000F926268Be77AB7E1d17E4E4C7d4B28A65'
 
 const VAULT_ABI = parseAbi([
   'function balanceOf(address owner) view returns (uint256)',

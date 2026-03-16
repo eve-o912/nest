@@ -73,7 +73,7 @@ export async function GET(req: Request) {
   // Check YO API
   try {
     const yoStart = Date.now();
-    const YOUSD_VAULT = '0x0000000f926268be77AB7E1d17e4e4c7d4b28a65';
+    const YOUSD_VAULT = '0x0000000F926268Be77AB7E1d17E4E4C7d4B28A65';
     const res = await fetch(`https://api.yo.xyz/api/v1/vault/base/${YOUSD_VAULT}/snapshot`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
