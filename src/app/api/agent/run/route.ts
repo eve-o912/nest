@@ -84,29 +84,35 @@ const AGENT_TOOLS = [{
   ],
 }]
 
-export const POST = withSecurity(async (req: Request) => {
+export async function POST(req: Request) {
+  const isCron = req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}` 
   const body = await req.json().catch(() => ({}))
 
   // Handle client-side deposit recording (MetaMask flow)
   if (body.recordDeposit && body.userId) {
-    const { walletAddress, goalName, amountUsdc, txHash } = body.recordDeposit;
-    await query(
-      `INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
-       VALUES ($1, 'deposit_to_goal', $2, $3, $4, $5)`,
-      [
-        body.userId,
-        JSON.stringify({ goal_name: goalName, amount_usdc: amountUsdc }),
-        JSON.stringify({ success: true, amount_usdc: amountUsdc, tx_hash: txHash }),
-        `Manual deposit of $${amountUsdc} to ${goalName}`,
-        txHash,
-      ]
-    );
-    await query(
-      `UPDATE goals SET deposited_amount = deposited_amount + $1 
-       WHERE user_id = $2 AND LOWER(name) = LOWER($3)`,
-      [amountUsdc, body.userId, goalName]
-    );
-    return Response.json({ success: true, tx_hash: txHash });
+    try {
+      const { walletAddress, goalName, amountUsdc, txHash } = body.recordDeposit
+      await query(
+        `INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
+         VALUES ($1, 'deposit_to_goal', $2, $3, $4, $5)`,
+        [
+          body.userId,
+          JSON.stringify({ goal_name: goalName, amount_usdc: amountUsdc }),
+          JSON.stringify({ success: true, amount_usdc: amountUsdc, tx_hash: txHash }),
+          `Manual deposit of $${amountUsdc} to ${goalName}`,
+          txHash,
+        ]
+      )
+      await query(
+        `UPDATE goals SET deposited_amount = deposited_amount + $1
+         WHERE user_id = $2 AND LOWER(name) = LOWER($3)`,
+        [amountUsdc, body.userId, goalName]
+      )
+      return Response.json({ success: true, tx_hash: txHash })
+    } catch (err: any) {
+      logger.error('Failed to record deposit', err, { userId: body.userId })
+      return Response.json({ error: err.message || 'Failed to record deposit' }, { status: 500 })
+    }
   }
 
   // Handle manual forced actions (e.g., direct deposit from UI)
@@ -115,7 +121,6 @@ export const POST = withSecurity(async (req: Request) => {
     if (!rows.length) {
       return Response.json({ error: 'User not found. Please setup agent rules first.' }, { status: 404 })
     }
-    // Map snake_case database columns to camelCase
     const dbRules = rows[0]
     const rules: AgentRules = {
       userId: dbRules.user_id,
@@ -130,10 +135,10 @@ export const POST = withSecurity(async (req: Request) => {
       enabled: dbRules.enabled,
     }
     const { tool, args } = body.forceAction
-    
+
     try {
       const result = await executeTool(tool, args, rules)
-      
+
       await query(
         `INSERT INTO agent_logs (user_id, tool_name, input, result, reason, tx_hash)
          VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -143,23 +148,24 @@ export const POST = withSecurity(async (req: Request) => {
           JSON.stringify(args),
           JSON.stringify(result),
           args.reason ?? '',
-          result.tx_hash ?? null
+          result.tx_hash ?? null,
         ]
       )
-      
-      return Response.json({ 
-        ran: 1, 
-        results: [{ userId: rules.userId, actions: [{ tool, args, result }] }]
+
+      return Response.json({
+        ran: 1,
+        results: [{ userId: rules.userId, actions: [{ tool, args, result }] }],
       })
     } catch (err: any) {
       logger.error('Manual action failed', err, { userId: body.userId, tool: body.forceAction?.tool })
-      return Response.json({ 
-        ran: 0, 
-        results: [{ userId: rules.userId, error: err.message }]
+      return Response.json({
+        ran: 0,
+        results: [{ userId: rules.userId, error: err.message }],
       }, { status: 500 })
     }
   }
 
+  // Cron / manual agent run
   let users: AgentRules[] = []
   if (isCron) {
     if (new Date().getDate() === 1) {
@@ -271,7 +277,7 @@ Call all applicable tools now.
               JSON.stringify(args),
               JSON.stringify(result),
               args.reason ?? '',
-              result.tx_hash ?? null
+              result.tx_hash ?? null,
             ]
           )
           actions.push({ tool: name, args, result })
